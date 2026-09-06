@@ -1,7 +1,7 @@
-# Fixed benchmark suite
+# Dataset dynamic-batching benchmark
 
-Start Helios in one terminal. Model loading and the one-time compile warmup belong
-to the server process:
+Start Helios in one terminal. Model loading and the one-time compile warmup
+belong to the server process:
 
 ```bash
 HELIOS_TORCH_COMPILE=1 uv run helios
@@ -10,46 +10,41 @@ HELIOS_TORCH_COMPILE=1 uv run helios
 Then run the HTTP-only benchmark client in another terminal:
 
 ```bash
-uv run python benchmarks/run.py --label baseline
-uv run python benchmarks/run.py --label kv-cache
-uv run python benchmarks/run.py --label prefix-cache
-uv run python benchmarks/run.py --label torch-compile
-uv run python benchmarks/run.py --label static-batch --batch
+uv run python benchmarks/run.py --label dynamic-batch
+uv run python benchmarks/run.py --label dynamic-batch --concurrency 16
+uv run python benchmarks/run.py --label custom --dataset /path/to/dataset.json
 ```
 
-The benchmark never loads, starts, stops, or owns the model. It only calls the
-running server's `/health` and `/v1/chat/completions` endpoints. The chat
-endpoint infers single or static-batch generation from the request body. Use
-`--base-url` or `HELIOS_BASE_URL` when Helios is not listening on
-`http://127.0.0.1:8000`. The label only names the saved result; it does not
-change the workload.
+The runner never loads, starts, stops, or owns the model. It calls the running
+server's `/health` and `/v1/chat/completions` endpoints. It sends individual
+chat-completion requests concurrently, so Helios's dynamic scheduler—not the
+explicit static-batch endpoint—chooses compatible batches. Use `--base-url` or
+`HELIOS_BASE_URL` when the server is not listening on `http://127.0.0.1:8000`.
 
-By default, the client sends every workload input to the server in order. Pass
-`--batch` to send the entire suite through one model-side static batch. Static
-batch records include aggregate batch latency and output throughput. Per-request
-TTFT and throughput are left empty because the static batch currently exposes
-only aggregate timing. The saved record identifies the mode as `sequential` or
-`static-batch`. There are no concurrent client request modes. The runner prints
-each response as soon as the endpoint returns it, then prints the metrics after
-all requests finish. All four workloads run together:
+`dataset.json` is a versioned request file. Each entry supplies the same fields
+used by the chat-completions API, except that the runner supplies the loaded
+model ID and `stream: false`:
 
-| Workload | Shape | What it isolates |
-| --- | --- | --- |
-| `prefill-long` | Long prompt, 8 output tokens | Attention and prompt-processing changes |
-| `decode-long` | Short 2,000-word essay request, up to 2,048 output tokens | KV cache and token-by-token decode changes |
-| `balanced` | Medium prompt, up to 64 output tokens | Typical mixed generation behavior |
-| `agent-prefix` | Agent input followed by simulated tool call/result exchanges, 48 output tokens per step | Prefix reuse across an agent loop |
+```json
+{
+  "schema_version": 1,
+  "requests": [
+    {
+      "id": "decode_01",
+      "category": "decode_heavy",
+      "messages": [{"role": "user", "content": "..."}],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    }
+  ]
+}
+```
 
-Only `agent-prefix` simulates a tool workflow: it appends an assistant tool call
-and its returned tool result to the same transcript in order:
-customer lookup, order listing, and order details. No tool is actually invoked.
-The model and cache remain loaded for the full sequence.
-
-The terminal table reports input/output token counts, end-to-end latency, time to
-first token (TTFT), generation throughput, and restored-token cache hit rate for
-every request. The JSON result additionally records the complete input and output
-for each request, plus:
-
-- Model revision, host, platform, and accelerator.
+After `/health`, the runner sends one isolated warmup request. It records its
+client end-to-end latency, server total time, and TTFT separately; it is not a
+dataset sample. Dataset samples retain their individual server timings, while
+the record additionally contains dynamic-batch aggregate elapsed time and
+output throughput. The runner validates the dataset before contacting Helios.
 
 Results are written to `benchmarks/results/`.

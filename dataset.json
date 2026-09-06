@@ -1,262 +1,395 @@
-[
-  {
-    "id": "decode_01",
-    "category": "decode_heavy",
-    "prompt": "Explain how DNS works in about 200 words. Include recursive resolvers, authoritative name servers, caching, and TTL.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "decode_02",
-    "category": "decode_heavy",
-    "prompt": "Write a 500-word comparison of nuclear, solar, and wind power. Compare reliability, cost, scalability, land use, and environmental impact.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "decode_03",
-    "category": "decode_heavy",
-    "prompt": "Explain modern GPU architecture in roughly 300 words. Cover streaming multiprocessors, CUDA cores, tensor cores, caches, VRAM, and memory bandwidth.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "decode_04",
-    "category": "decode_heavy",
-    "prompt": "Write a 700-word science-fiction story about an engineer discovering that an AI has secretly optimized a city's infrastructure for decades.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "decode_05",
-    "category": "decode_heavy",
-    "prompt": "Create a 400-word practical tutorial for building a REST API in Python. Cover routing, validation, persistence, errors, testing, and deployment.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "decode_06",
-    "category": "decode_heavy",
-    "prompt": "Summarize the Industrial Revolution in approximately 250 words. Explain the major technological, economic, and social changes.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "decode_07",
-    "category": "decode_heavy",
-    "prompt": "Explain LLM inference in about 600 words. Cover tokenization, transformer layers, attention, KV caching, prefill, decoding, and sampling.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "decode_08",
-    "category": "decode_heavy",
-    "prompt": "Design a scalable URL-shortening service in about 350 words. Discuss APIs, IDs, storage, caching, replication, load balancing, and failures.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "decode_09",
-    "category": "decode_heavy",
-    "prompt": "Write a 500-word mystery story set at an isolated research station where the crew finds a log entry written several days in the future.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "decode_10",
-    "category": "decode_heavy",
-    "prompt": "Explain virtual memory in about 200 words using a concrete example. Cover pages, page tables, address translation, TLBs, and page faults.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "balanced_01",
-    "category": "balanced",
-    "prompt": "A startup runs an API service on three application servers behind a load balancer. Traffic is usually stable, but every morning between 9 AM and 11 AM request volume triples. The service uses PostgreSQL for persistent data and Redis for caching. During traffic spikes, API latency increases from 80 ms to more than 700 ms even though CPU utilization on the application servers stays below 50%. Database monitoring shows a large increase in repeated read queries, while Redis hit rate falls from 92% to 55%. Engineers recently reduced the cache TTL from 30 minutes to 5 minutes because they were concerned about stale data. Explain the most likely cause of the slowdown and recommend a practical fix in about 180 words.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "balanced_02",
-    "category": "balanced",
-    "prompt": "A university wants to reduce electricity consumption across its campus. Most buildings were constructed between 1990 and 2010 and use conventional air-conditioning, fluorescent lighting, and manually controlled equipment. Energy audits show that cooling accounts for 45% of electricity usage, lighting for 20%, computer equipment for 15%, and other systems for the remaining 20%. Many classrooms remain cooled and illuminated even when empty. The university has a limited budget and cannot replace all existing infrastructure at once. It is considering smart thermostats, occupancy sensors, LED lighting, rooftop solar panels, and replacing older air-conditioning units. Propose a prioritized three-stage energy efficiency plan and justify the order of investments in approximately 200 words.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "balanced_03",
-    "category": "balanced",
-    "prompt": "An online retailer operates warehouses in Mumbai, Delhi, Bengaluru, and Hyderabad. Orders are assigned to the geographically closest warehouse that has the requested product in stock. Recently, customers have complained that estimated delivery dates frequently change after checkout. Investigation shows that inventory updates from warehouses can take several minutes to reach the central ordering system. During flash sales, several customers may purchase the last remaining units of a product before the system receives the newest inventory information. The company wants to improve consistency without significantly slowing down checkout or requiring a complete redesign of its platform. Explain the underlying distributed-systems problem and suggest an architecture that reduces overselling while keeping checkout responsive. Limit your answer to about 220 words.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "balanced_04",
-    "category": "balanced",
-    "prompt": "Researchers are training an image classifier to distinguish five species of birds. Their dataset contains 50,000 photographs, but the classes are heavily imbalanced: one species accounts for 55% of the images while the rarest represents only 4%. The model obtains 88% overall accuracy, yet recall for the rarest species is only 41%. Training accuracy continues increasing while validation accuracy stops improving after epoch 12. The team currently uses standard cross-entropy loss, random train-validation splitting, and basic image resizing without augmentation. They have enough compute to run several additional experiments but cannot collect more labeled images before the deadline. Recommend changes to the training and evaluation pipeline and explain why they should improve performance. Respond in approximately 200 words.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "balanced_05",
-    "category": "balanced",
-    "prompt": "A coastal city experiences severe flooding several times each monsoon season. Over the last twenty years, rapid construction has replaced many open fields and wetlands with roads, apartments, and commercial buildings. The drainage network was designed decades ago for a much smaller population and frequently becomes clogged with debris. Climate records also show an increase in short periods of extremely heavy rainfall. City officials are considering widening storm drains, restoring wetlands, constructing underground retention tanks, introducing permeable pavements, and restricting new development in flood-prone areas. They have enough funding to implement only some measures immediately. Write a 180-220 word recommendation that combines short-term flood protection with a longer-term strategy.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "balanced_06",
-    "category": "balanced",
-    "prompt": "A software company has a monolithic web application used by approximately two million users. Deployments currently occur once every two weeks and require about thirty minutes of downtime. The application contains authentication, billing, search, notifications, analytics, and user-profile functionality in a single codebase and database. Engineering teams frequently block one another because unrelated features must pass the same integration tests before deployment. Management proposes immediately splitting the entire application into microservices. Several senior engineers argue that doing so would introduce networking, observability, deployment, and data-consistency complexity. Evaluate both positions and recommend a migration strategy that improves deployment independence without creating unnecessary operational complexity. Answer in about 220 words.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "balanced_07",
-    "category": "balanced",
-    "prompt": "A country generates 65% of its electricity from coal, 15% from natural gas, 10% from hydroelectric power, 7% from solar and wind, and 3% from nuclear power. Electricity demand is expected to grow by roughly 40% over the next fifteen years. The government wants to cut power-sector carbon emissions while maintaining reliable electricity and avoiding large increases in consumer prices. Solar and wind costs have fallen quickly, but the transmission grid is weak and large-scale energy storage remains expensive. Existing coal plants employ tens of thousands of workers. Develop a balanced transition strategy covering generation, grid infrastructure, reliability, and economic effects on workers. Keep the response between 180 and 230 words.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "balanced_08",
-    "category": "balanced",
-    "prompt": "An LLM inference service hosts a single transformer model on one GPU. Monitoring shows that requests with long prompts spend most of their initial latency in the prefill phase, while requests that generate hundreds of tokens spend most of their execution time in autoregressive decoding. The service currently processes requests sequentially. GPU utilization is high during large prompt processing but frequently drops during token-by-token generation. Product traffic includes both short chatbot requests and occasional long-document summarization jobs. The engineering team is considering continuous batching, prefix caching, paged KV-cache management, and separating prefill and decode onto different workers. Explain which optimizations you would implement first and why. Discuss the expected effect on throughput, latency, and GPU utilization in approximately 220 words.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "balanced_09",
-    "category": "balanced",
-    "prompt": "A fictional crew is traveling to a research base on Mars when their communications system begins receiving messages apparently sent by their own spacecraft twelve hours in the future. The messages correctly predict several minor equipment failures, convincing most of the crew that they are genuine. The captain wants to follow the future messages exactly, while the chief engineer worries that doing so could create the events being predicted. Meanwhile, the next message warns of a catastrophic reactor failure but provides instructions that require shutting down life support for seven minutes. Continue the story for approximately 250 words. Focus on the crew's decision and end with a surprising but logically consistent discovery.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 0.95
-  },
-  {
-    "id": "balanced_10",
-    "category": "balanced",
-    "prompt": "A small bank is modernizing a fraud-detection system that currently relies on manually written rules such as transaction amount thresholds, unusual locations, and repeated failed payment attempts. The rules catch many obvious cases but also generate large numbers of false positives, causing legitimate customer cards to be blocked. The bank has several years of historical transaction data including confirmed fraud labels, merchant categories, transaction values, locations, timestamps, and customer spending histories. Fraud represents less than 0.5% of transactions. Regulators require the bank to explain why suspicious transactions are flagged and to monitor whether the system treats customer groups unfairly. Propose a machine-learning approach, suitable evaluation metrics, and deployment safeguards in about 220 words.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-  {
-    "id": "prefill_01",
-    "category": "prefill_heavy",
-    "task": "incident_analysis",
-    "prompt": "Read the following production incident report and identify the primary root cause in one sentence.\n\nINCIDENT REPORT\n\nAt 09:42 UTC, monitoring detected an increase in HTTP 5xx responses from the checkout API. The service normally handles approximately 3,500 requests per second with a p95 latency below 180 ms. Within six minutes, p95 latency exceeded 2.4 seconds and the error rate reached 17%. Traffic volume was only 8% above the weekly average, and no marketing campaigns or external traffic events were active.\n\nThe checkout service runs across 24 Kubernetes pods. CPU utilization remained between 38% and 52%, and memory consumption remained stable. Autoscaling therefore did not add additional replicas. Network metrics showed no packet loss or unusual cross-zone traffic. The payment provider reported normal availability throughout the incident.\n\nEngineers initially suspected PostgreSQL because database connection usage increased from 46% to 91%. Query latency, however, remained mostly unchanged. Examination of application traces showed requests spending increasing amounts of time waiting to obtain database connections rather than executing queries. Several checkout operations that normally held a connection for less than 40 ms were holding one for more than a second.\n\nA deployment at 09:31 UTC had introduced a new inventory-verification step. Previously, the application queried inventory, released its database connection, and then contacted the remote warehouse service. The new implementation opened a transaction, queried inventory, called the warehouse service while the transaction remained open, updated the reservation status, and finally committed the transaction.\n\nThe warehouse service itself had a typical median response time of 90 ms but occasionally required 800-1500 ms for requests involving older warehouses. These slow calls now caused checkout workers to retain database connections throughout the network wait. As concurrent requests accumulated, the PostgreSQL connection pool became exhausted. New requests then waited for connections, increasing request duration further and creating a feedback loop.\n\nAt 10:07 UTC engineers rolled back the deployment. Connection utilization fell below 50% within four minutes, and checkout latency returned to normal by 10:14 UTC. No database configuration, indexes, Kubernetes resources, or warehouse infrastructure were changed during recovery.\n\nA follow-up load test reproduced the incident whenever remote warehouse latency exceeded approximately 600 ms. Moving the remote warehouse request outside the database transaction eliminated the connection exhaustion even when artificial warehouse latency was increased to two seconds.\n\nQuestion: What was the primary root cause of the incident? Answer in one sentence.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-
-  {
-    "id": "prefill_02",
-    "category": "prefill_heavy",
-    "task": "contract_extraction",
-    "prompt": "Read the following software services agreement excerpt and answer only the question at the end.\n\nThe agreement begins on January 1, 2027 and continues for an initial term of twenty-four months. Unless either party provides written notice at least sixty days before expiration of the initial term, the agreement automatically renews for successive twelve-month periods. Fees for renewed periods may increase by no more than five percent relative to the immediately preceding period unless both parties agree otherwise in writing.\n\nThe provider will maintain monthly availability of at least 99.9%, excluding scheduled maintenance announced at least forty-eight hours in advance. Scheduled maintenance may not exceed four hours during any calendar month. If availability falls below 99.9% but remains at or above 99.0%, the customer receives a service credit equal to ten percent of the affected month's recurring fee. Availability below 99.0% results in a twenty-five percent credit. Service credits are the customer's sole monetary remedy for availability failures except where the failure results from gross negligence or intentional misconduct.\n\nCustomer data remains the property of the customer. The provider may process customer data solely to deliver, secure, maintain, and improve the contracted service. The provider may not sell customer data or use it to train a generally available machine-learning model without separate written permission. Backups may be retained for up to ninety days following deletion from the production environment.\n\nEither party may terminate the agreement for material breach if the breaching party fails to cure the breach within thirty days after receiving written notice describing the breach. The customer may also terminate immediately if the provider experiences a data breach caused by gross negligence, becomes insolvent, ceases substantial business operations, or repeatedly fails the availability commitment in three consecutive months.\n\nIn addition, beginning twelve months after the effective date, the customer may terminate the agreement for convenience by providing ninety days of written notice. If the customer exercises termination for convenience before completion of the initial twenty-four-month term, it must pay fifty percent of the recurring fees that would otherwise have become due between the effective termination date and the end of the initial term. No early termination fee applies when termination results from an uncured material breach by the provider.\n\nUpon termination, the provider will make customer data available for export for thirty days. After this export period, production copies may be deleted, although encrypted backups may remain for the retention period described above. Outstanding invoices for services already delivered remain payable.\n\nQuestion: After the first twelve months, how much notice must the customer give to terminate for convenience? Return only the duration.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-
-  {
-    "id": "prefill_03",
-    "category": "prefill_heavy",
-    "task": "research_result_extraction",
-    "prompt": "Read the research summary and report the experiment configuration that achieved the lowest validation error.\n\nA research group evaluated techniques for reducing inference cost in a transformer-based image classifier. The baseline model contained 24 transformer blocks, embedding width 1024, 16 attention heads, and approximately 305 million parameters. It achieved a validation error of 11.8% while requiring 58.4 GFLOPs per image.\n\nThe first experiment applied unstructured magnitude pruning to linear layers. Removing 20% of weights produced 12.0% validation error and did not materially improve wall-clock inference because the hardware executed the resulting sparse tensors inefficiently. At 40% sparsity, validation error increased to 13.7%. Researchers therefore did not pursue higher unstructured sparsity levels.\n\nThe second experiment removed complete transformer blocks. Removing the final two blocks reduced compute to 53.7 GFLOPs and produced 11.9% validation error after five epochs of fine-tuning. Removing four blocks reduced compute to 48.9 GFLOPs but increased error to 12.6%. Removing every second block performed significantly worse, reaching 15.2% error despite using a similar number of layers, suggesting that layer position mattered.\n\nA third set of experiments reduced attention heads. Keeping 12 of the original 16 heads in every layer yielded an error of 11.7% and compute of 52.1 GFLOPs. Keeping eight heads yielded 12.4% error. Combining 12 heads with removal of the final two transformer blocks reduced compute to 47.5 GFLOPs and produced 11.6% validation error after ten epochs of fine-tuning.\n\nResearchers then tested knowledge distillation. The student was initialized from the pruned model and trained using a weighted combination of ground-truth cross-entropy and KL divergence from the original model. With a distillation temperature of 2 and teacher-loss weight of 0.3, validation error fell to 11.2%. Increasing the teacher-loss weight to 0.6 produced an error of 11.0%. Using temperature 4 with weight 0.6 produced 11.3% error.\n\nThe best final experiment combined removal of the final two transformer blocks, reduction from 16 to 12 attention heads, and distillation at temperature 2 with teacher-loss weight 0.6. This configuration required 47.5 GFLOPs and achieved 11.0% validation error. A more aggressive configuration removing four blocks and retaining 12 heads required only 42.8 GFLOPs but achieved 11.9% error even with distillation.\n\nQuestion: Give the architecture changes and distillation settings of the configuration with the lowest validation error. Use no more than two sentences.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-
-  {
-    "id": "prefill_04",
-    "category": "prefill_heavy",
-    "task": "log_diagnosis",
-    "prompt": "Analyze the following condensed infrastructure log and identify the component most directly responsible for the outage.\n\n08:14:02 gateway-3 request_rate=1840/s p95=122ms errors=0.2%\n08:14:10 api-12 cpu=43% mem=61% threads=88/256\n08:14:12 redis-primary ops=48211/s hit_rate=94.7% mem=68%\n08:14:15 postgres-primary connections=146/500 query_p95=18ms\n08:15:01 deploy-controller release=2026.09.06-rc4 status=complete\n08:15:11 gateway-1 request_rate=1875/s p95=128ms errors=0.2%\n08:15:20 api-07 cpu=47% mem=62% threads=91/256\n08:16:04 catalog-service cache_refresh_started=true\n08:16:07 redis-primary ops=51580/s hit_rate=93.9% mem=69%\n08:16:12 postgres-primary connections=152/500 query_p95=19ms\n08:17:31 catalog-service refresh_items=148230 elapsed=87s\n08:18:00 gateway-2 request_rate=1892/s p95=141ms errors=0.3%\n08:18:20 api-14 cpu=49% mem=64% threads=96/256\n08:19:03 redis-primary evicted_keys=0 hit_rate=93.5%\n08:19:44 search-indexer batch_started documents=50000\n08:20:10 search-indexer heap=71% cpu=76%\n08:20:21 elasticsearch-node-2 cpu=64% heap=68% disk=52%\n08:21:04 gateway-1 p95=158ms errors=0.4%\n08:21:30 kafka-orders consumer_lag=123\n08:22:00 payment-worker pending=46 normal_range=20-80\n08:22:42 postgres-primary connections=168/500 query_p95=21ms\n08:23:11 auth-service token_p95=14ms errors=0.01%\n08:24:00 redis-primary hit_rate=92.8% ops=53750/s\n08:24:50 gateway-3 p95=167ms errors=0.5%\n08:25:07 catalog-service cache_refresh_complete=true\n08:25:34 search-indexer batch_complete documents=50000\n08:26:20 object-store upload_p95=84ms errors=0.0%\n08:27:02 api-09 cpu=51% mem=65% threads=102/256\n08:28:15 postgres-replica-1 replication_lag=0.6s\n08:29:40 kafka-orders consumer_lag=176\n08:30:02 gateway-2 p95=172ms errors=0.4%\n08:31:13 feature-service config_reload_started=true version=441\n08:31:14 feature-service ERROR parser invalid_rule line=1842 token='=>'\n08:31:14 feature-service WARN keeping_previous_config=false\n08:31:15 feature-service active_rules=0\n08:31:18 api-03 dependency=feature-service errors=18%\n08:31:19 api-04 dependency=feature-service errors=22%\n08:31:21 gateway-1 errors=9.4% p95=480ms\n08:31:26 gateway-2 errors=17.1% p95=612ms\n08:31:30 feature-service requests=11422/s responses_default=100%\n08:31:38 checkout-api incorrect_price_flags=3821\n08:31:42 recommendation-api empty_feature_vectors=91%\n08:31:50 api-08 cpu=44% mem=64%\n08:32:01 postgres-primary connections=174/500 query_p95=20ms\n08:32:04 redis-primary hit_rate=93.1%\n08:32:10 gateway-3 errors=24.8%\n08:32:30 oncall incident_declared severity=SEV1\n08:34:11 feature-service rollback_config version=440\n08:34:13 feature-service active_rules=3874\n08:34:18 api-03 dependency_errors=2.1%\n08:34:26 gateway-1 errors=4.0%\n08:35:02 gateway-2 errors=0.7% p95=191ms\n08:36:10 incident status=recovered\n\nQuestion: Which component most directly caused the outage, and what failed? Answer in one sentence.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-
-  {
-    "id": "prefill_05",
-    "category": "prefill_heavy",
-    "task": "financial_memo_extraction",
-    "prompt": "Read the following quarterly operating memo and identify the largest contributor to year-over-year revenue growth.\n\nThe company reported quarterly revenue of $428 million, up 18% from $363 million in the same quarter last year. Gross margin increased from 61.8% to 64.2%, primarily because infrastructure costs per transaction declined and enterprise customers represented a larger share of revenue.\n\nConsumer subscriptions generated $146 million compared with $137 million last year, an increase of $9 million. Subscriber count increased 11%, although average revenue per subscriber declined slightly because of expansion into lower-priced international markets.\n\nSmall-business subscriptions generated $92 million, compared with $81 million a year earlier, contributing $11 million of incremental revenue. Management noted strong adoption of the new team collaboration package but also reported elevated churn among businesses with fewer than five employees.\n\nEnterprise subscriptions increased from $89 million to $123 million, adding $34 million year over year. The number of enterprise customers spending more than $100,000 annually increased 27%. Management attributed most of this growth to multi-year security and data-governance contracts signed by regulated financial and healthcare companies.\n\nUsage-based API revenue increased from $31 million to $46 million, contributing $15 million of incremental revenue. API token volume increased 42%, while average price per token declined because larger customers moved to committed-use contracts.\n\nProfessional services revenue grew from $18 million to $21 million, adding $3 million. Hardware and miscellaneous revenue was unchanged at approximately $6 million.\n\nGeographically, North American revenue grew 14%, Europe grew 21%, and Asia-Pacific grew 31% from a smaller base. Currency movements reduced reported revenue growth by approximately one percentage point.\n\nOperating expenses rose 13%, slower than revenue, resulting in an operating margin of 16.4% compared with 12.1% last year. Research and development remained the largest operating expense category. Sales and marketing expense increased only 7% as the company shifted more enterprise renewals to an internal account-management team.\n\nManagement expects next-quarter revenue between $438 million and $446 million. Risks highlighted include slower small-business hiring, energy costs for inference infrastructure, and possible delays in two large government contracts.\n\nQuestion: Which business segment contributed the largest absolute amount of year-over-year revenue growth, and by how much? Answer briefly.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-
-  {
-    "id": "prefill_06",
-    "category": "prefill_heavy",
-    "task": "policy_reasoning",
-    "prompt": "Read the following internal access-control policy and determine whether the described access request should be approved.\n\nProduction systems are divided into Restricted, Confidential, and Standard environments. Customer payment data, authentication secrets, encryption keys, and raw identity documents are classified as Restricted. Customer-generated application data is generally Confidential unless a separate classification applies.\n\nEmployees may receive Standard access when required by their assigned team. Confidential production access requires manager approval and completion of annual security training. Restricted production access additionally requires approval from the system owner and Security Engineering. Access must follow least-privilege principles and expire when the underlying business requirement ends.\n\nContractors may access Standard and Confidential systems when access is explicitly required by their statement of work. Contractors are prohibited from receiving standing administrative access to Restricted systems. Temporary Restricted access may be granted only for a specific incident, must be supervised by an employee with permanent authorization, and expires after four hours unless Security Engineering approves an extension.\n\nAll production access must use company-managed identities with phishing-resistant multi-factor authentication. Shared accounts are prohibited. Credentials must not be transmitted through email, chat messages, ticket comments, or source-code repositories.\n\nEngineers on the database reliability team maintain PostgreSQL clusters containing Confidential application data. They may receive read-write database privileges when on call. Direct access to tables containing raw payment card information remains Restricted and requires the additional approvals described above.\n\nAccess reviews occur every ninety days. Managers must remove privileges belonging to employees who change teams unless the new role independently requires them. Human Resources triggers immediate account suspension when employment ends. Contractor accounts automatically expire at the end date stored in the vendor-management system.\n\nEmergency access may bypass normal manager approval when a Severity 1 incident threatens customer availability or data integrity. Emergency access must still use an individual managed identity, is logged continuously, expires after the incident, and must receive retrospective review within one business day.\n\nScenario: A database contractor's six-month engagement ended yesterday. Today an engineer discovers that the contractor wrote a migration tool that only the contractor fully understands. The team wants to reactivate the contractor's old account for seven days so the contractor can investigate a performance issue. The issue is causing elevated latency but has not been declared a Severity 1 incident. The requested account would have read-write access to Confidential production databases. The engineering manager has approved the request, but no new statement of work has been signed and the vendor-management system still lists the engagement as ended.\n\nQuestion: Under the stated policy, should the old account be reactivated? Answer yes or no followed by one short reason.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-
-  {
-    "id": "prefill_07",
-    "category": "prefill_heavy",
-    "task": "customer_feedback_aggregation",
-    "prompt": "Analyze the following condensed collection of customer feedback for a developer platform. Identify the single most common product complaint.\n\nCustomer 01: Deployment itself is fast, but build logs disappear after seven days, which makes debugging older failures painful.\nCustomer 02: Love the CLI. Main problem is that cold starts on Python services are frequently above four seconds.\nCustomer 03: Billing dashboard is confusing when several projects share the same organization.\nCustomer 04: We need longer log retention. A production issue from two weeks ago became nearly impossible to investigate.\nCustomer 05: GitHub integration works well, although pull-request previews sometimes take too long to provision.\nCustomer 06: Please let us retain logs for at least thirty days without exporting everything ourselves.\nCustomer 07: Database provisioning is fantastic. We would like larger Redis instances.\nCustomer 08: Cold starts improved recently but are still noticeable for low-traffic functions.\nCustomer 09: Our biggest issue is logs. Seven days is nowhere near enough for incident investigation.\nCustomer 10: Organization permissions need more granular roles.\nCustomer 11: The new usage page is excellent. Would still like cost alerts per project.\nCustomer 12: Build logs should have configurable retention. Losing them after a week has caused several problems for our team.\nCustomer 13: Deployment from GitHub occasionally gets stuck after a force push.\nCustomer 14: Python startup latency is the main reason we moved one service elsewhere.\nCustomer 15: Would love private networking between projects in different organizations.\nCustomer 16: Log search is good, but retention is too short. Thirty or ninety days would be much more useful.\nCustomer 17: The CLI authentication flow breaks on headless development machines.\nCustomer 18: Support was helpful. My only complaint is not being able to inspect logs from incidents that happened more than a week ago.\nCustomer 19: Please add SAML to the mid-tier plan.\nCustomer 20: Cold starts are inconsistent, especially after deployments.\nCustomer 21: The documentation for custom domains could be clearer.\nCustomer 22: Seven-day logs are a serious limitation for compliance investigations.\nCustomer 23: Billing export should include project tags.\nCustomer 24: Preview environments are one of our favorite features.\nCustomer 25: We regularly need logs from ten to fourteen days ago and currently have to ship them to another provider.\nCustomer 26: Python cold starts remain somewhat slow but not a blocker anymore.\nCustomer 27: Role-based access control is missing a read-only billing role.\nCustomer 28: We need longer application and build log history inside the dashboard.\nCustomer 29: Database backups are simple and reliable.\nCustomer 30: Our team wastes time maintaining a separate logging pipeline purely because native retention is too short.\nCustomer 31: Usage alerts arrived several hours late last month.\nCustomer 32: GitHub deployments are normally seamless.\nCustomer 33: Longer log retention would immediately make the platform more useful for us.\nCustomer 34: The API rate limits are difficult to understand.\nCustomer 35: Our security team requires at least thirty days of searchable operational logs.\nCustomer 36: Serverless startup time is occasionally high.\nCustomer 37: Build caching saved us a lot of time.\nCustomer 38: Logs disappearing after seven days is our number one complaint.\nCustomer 39: We need more regions in South America.\nCustomer 40: Native log retention should be configurable by plan.\n\nQuestion: What is the single most common complaint? Answer with a short noun phrase.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-
-  {
-    "id": "prefill_08",
-    "category": "prefill_heavy",
-    "task": "technical_comparison",
-    "prompt": "Read the benchmark report and identify which configuration gives the best decode throughput without exceeding 20 GB peak VRAM.\n\nAn inference team tested seven configurations of the same 7-billion-parameter transformer on one GPU. All tests used the same 512-token prompt, generated 256 new tokens, ran after warmup, and used batch size four. Each configuration was measured five times and the median is reported.\n\nConfiguration A used FP32 weights, standard attention, and a dynamically growing KV cache. Peak VRAM was 31.4 GB. Prefill throughput was 3,120 tokens/s and decode throughput was 71 tokens/s.\n\nConfiguration B used FP16 weights with standard attention and a dynamic KV cache. Peak VRAM fell to 18.9 GB. Prefill throughput increased to 6,480 tokens/s and decode throughput reached 119 tokens/s.\n\nConfiguration C used FP16 weights, scaled-dot-product attention, and a dynamic KV cache. Peak VRAM was 18.7 GB. Prefill throughput increased to 8,940 tokens/s and decode throughput reached 124 tokens/s.\n\nConfiguration D used FP16 weights, scaled-dot-product attention, and a preallocated KV cache. Peak VRAM was 19.6 GB. Prefill throughput was 9,010 tokens/s and decode throughput reached 139 tokens/s.\n\nConfiguration E used BF16 weights, scaled-dot-product attention, and a preallocated KV cache. Peak VRAM was 19.8 GB. Prefill throughput was 8,870 tokens/s and decode throughput was 137 tokens/s.\n\nConfiguration F used FP16 weights, scaled-dot-product attention, a preallocated KV cache, and CUDA graph capture. Peak VRAM increased to 21.3 GB. Prefill throughput reached 9,180 tokens/s and decode throughput reached 161 tokens/s.\n\nConfiguration G used INT8 weight-only quantization, scaled-dot-product attention, and a preallocated KV cache. Peak VRAM was 13.2 GB. Prefill throughput was 8,210 tokens/s and decode throughput reached 145 tokens/s. Accuracy evaluation showed a small but measurable degradation relative to the FP16 baseline.\n\nThe team emphasized that configurations should not be ranked using a combined tokens-per-second number because prefill and decode exercise the hardware differently. They also noted that CUDA graph capture adds static memory overhead, while quantization changes both memory traffic and numerical behavior.\n\nQuestion: Among configurations whose peak VRAM is at most 20 GB, which has the highest decode throughput? Return only the configuration letter and decode throughput.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  },
-
-  {
-    "id": "prefill_09",
-    "category": "prefill_heavy",
-    "task": "meeting_decision_extraction",
-    "prompt": "Read the meeting notes and state the final deployment decision.\n\n09:00 — Maya opens the release review. Version 3.8 contains the new search ranking model, redesigned account settings, and database connection-pool changes. The proposed production deployment is Thursday afternoon.\n\n09:05 — Search team reports that offline ranking metrics improved by 6.3%. An A/B test involving 10% of users showed a 2.1% increase in successful searches and no statistically significant increase in latency.\n\n09:12 — Frontend team reports that the account-settings redesign passed browser testing. One minor Safari rendering issue remains but affects only the alignment of an informational icon. The team considers it non-blocking.\n\n09:18 — Database team discusses connection-pool changes. Staging tests at normal load were successful. During a stress test at approximately four times normal traffic, however, several services exhausted their local connection pools. Increasing the pool size removed the application errors but pushed database connection usage close to the configured server limit.\n\n09:24 — Ravi suggests deploying the search and frontend changes while disabling the connection-pool changes behind a configuration flag. Lena argues that splitting the release could complicate rollback because all three changes currently share a migration bundle.\n\n09:31 — The migration owner confirms that the search model does not require a database migration. Account settings adds one nullable column but remains backward-compatible. The connection-pool change does not modify schema at all. Therefore the release can technically be separated.\n\n09:37 — Operations recommends against deploying the connection-pool change until another load test is performed with production-like service counts. They are comfortable with the search and account-settings changes.\n\n09:41 — Product asks whether delaying everything until Monday would materially reduce risk. Search team notes that a marketing campaign begins Friday and would benefit from the improved ranking model.\n\n09:46 — Maya proposes deploying search ranking and account settings on Thursday, leaving the existing database connection-pool behavior unchanged. The connection-pool change would move to a separate release after stress testing.\n\n09:49 — Ravi agrees. Lena agrees provided the migration for the nullable account column is applied independently and verified before application rollout. Operations agrees and offers to monitor database connections during deployment.\n\n09:53 — Final decision recorded: release 3.8 will be split. Search ranking and account settings will deploy Thursday as 3.8a. The connection-pool modification is removed from that deployment and becomes 3.8b, with no production date until the new load test passes. The account-settings migration will run first and must complete successfully before the application rollout begins.\n\n09:56 — Meeting ends.\n\nQuestion: What will be deployed Thursday, and what will be postponed? Answer in one sentence.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 0.95
-  },
-
-  {
-    "id": "prefill_10",
-    "category": "prefill_heavy",
-    "task": "document_fact_retrieval",
-    "prompt": "Read the following operations handbook excerpt and answer the question at the end.\n\nThe company operates three severity levels for customer-facing incidents. Severity 1 incidents involve widespread unavailability, confirmed loss of customer data, a security compromise affecting production credentials, or failure of a critical service with no available workaround. Severity 2 incidents cause significant degradation for a subset of customers or failure of an important feature where a workaround exists. Severity 3 incidents include minor defects, intermittent problems with limited impact, and internal operational issues that do not materially affect customers.\n\nFor Severity 1 incidents, the on-call engineer must create an incident channel within five minutes of classification, appoint an incident commander, and page the relevant service owner. An executive liaison is required when the event lasts longer than thirty minutes. Public status communication should occur within fifteen minutes of confirming customer impact and should be updated at least every thirty minutes while the incident remains active.\n\nFor Severity 2 incidents, an incident channel must be created within fifteen minutes. A dedicated incident commander is recommended but not mandatory when a single team owns the affected system. Public communication is required only when customer impact is expected to continue for more than one hour or when Support requests a notice because of high ticket volume.\n\nSeverity 3 incidents may be managed through the normal issue tracker. Teams should escalate the severity if new evidence indicates wider impact.\n\nDatabase corruption, deletion of customer records, or irreversible processing errors must immediately involve the data reliability team regardless of severity. Suspected exposure of authentication secrets or customer personal information must immediately involve Security Engineering. Engineers should preserve logs and avoid destructive remediation until evidence needed for investigation has been captured.\n\nDuring mitigation, restoring service takes priority over identifying the complete root cause. Changes made during an incident should be minimal, reversible where possible, and documented in the incident timeline. Once customer impact has ended, monitoring should continue for at least thirty minutes before the incident is marked resolved.\n\nA written post-incident review is mandatory for every Severity 1 event and for Severity 2 events lasting more than four hours. The review must describe customer impact, detection, timeline, contributing factors, root cause where known, mitigation, and follow-up actions. The purpose of the review is organizational learning rather than individual blame.\n\nScenario: A configuration error causes the main API to become unavailable to approximately 80% of customers. There is no workaround. The outage begins at 14:02 and is confirmed at 14:06. Engineers classify it as Severity 1 at 14:08. The incident remains active for forty-five minutes.\n\nQuestion: By what time should the first public status communication be issued according to the handbook? Return only the time.",
-    "max_new_tokens": 1024,
-    "temperature": 0.2,
-    "top_p": 1.0
-  }
-
-]
+{
+  "schema_version": 1,
+  "requests": [
+    {
+      "id": "decode_01",
+      "category": "decode_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Explain how DNS works in about 200 words. Include recursive resolvers, authoritative name servers, caching, and TTL."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "decode_02",
+      "category": "decode_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Write a 500-word comparison of nuclear, solar, and wind power. Compare reliability, cost, scalability, land use, and environmental impact."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "decode_03",
+      "category": "decode_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Explain modern GPU architecture in roughly 300 words. Cover streaming multiprocessors, CUDA cores, tensor cores, caches, VRAM, and memory bandwidth."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "decode_04",
+      "category": "decode_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Write a 700-word science-fiction story about an engineer discovering that an AI has secretly optimized a city's infrastructure for decades."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "decode_05",
+      "category": "decode_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Create a 400-word practical tutorial for building a REST API in Python. Cover routing, validation, persistence, errors, testing, and deployment."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "decode_06",
+      "category": "decode_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Summarize the Industrial Revolution in approximately 250 words. Explain the major technological, economic, and social changes."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "decode_07",
+      "category": "decode_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Explain LLM inference in about 600 words. Cover tokenization, transformer layers, attention, KV caching, prefill, decoding, and sampling."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "decode_08",
+      "category": "decode_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Design a scalable URL-shortening service in about 350 words. Discuss APIs, IDs, storage, caching, replication, load balancing, and failures."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "decode_09",
+      "category": "decode_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Write a 500-word mystery story set at an isolated research station where the crew finds a log entry written several days in the future."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "decode_10",
+      "category": "decode_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Explain virtual memory in about 200 words using a concrete example. Cover pages, page tables, address translation, TLBs, and page faults."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "balanced_01",
+      "category": "balanced",
+      "messages": [
+        {
+          "role": "user",
+          "content": "A startup runs an API service on three application servers behind a load balancer. Traffic is usually stable, but every morning between 9 AM and 11 AM request volume triples. The service uses PostgreSQL for persistent data and Redis for caching. During traffic spikes, API latency increases from 80 ms to more than 700 ms even though CPU utilization on the application servers stays below 50%. Database monitoring shows a large increase in repeated read queries, while Redis hit rate falls from 92% to 55%. Engineers recently reduced the cache TTL from 30 minutes to 5 minutes because they were concerned about stale data. Explain the most likely cause of the slowdown and recommend a practical fix in about 180 words."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "balanced_02",
+      "category": "balanced",
+      "messages": [
+        {
+          "role": "user",
+          "content": "A university wants to reduce electricity consumption across its campus. Most buildings were constructed between 1990 and 2010 and use conventional air-conditioning, fluorescent lighting, and manually controlled equipment. Energy audits show that cooling accounts for 45% of electricity usage, lighting for 20%, computer equipment for 15%, and other systems for the remaining 20%. Many classrooms remain cooled and illuminated even when empty. The university has a limited budget and cannot replace all existing infrastructure at once. It is considering smart thermostats, occupancy sensors, LED lighting, rooftop solar panels, and replacing older air-conditioning units. Propose a prioritized three-stage energy efficiency plan and justify the order of investments in approximately 200 words."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "balanced_03",
+      "category": "balanced",
+      "messages": [
+        {
+          "role": "user",
+          "content": "An online retailer operates warehouses in Mumbai, Delhi, Bengaluru, and Hyderabad. Orders are assigned to the geographically closest warehouse that has the requested product in stock. Recently, customers have complained that estimated delivery dates frequently change after checkout. Investigation shows that inventory updates from warehouses can take several minutes to reach the central ordering system. During flash sales, several customers may purchase the last remaining units of a product before the system receives the newest inventory information. The company wants to improve consistency without significantly slowing down checkout or requiring a complete redesign of its platform. Explain the underlying distributed-systems problem and suggest an architecture that reduces overselling while keeping checkout responsive. Limit your answer to about 220 words."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "balanced_04",
+      "category": "balanced",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Researchers are training an image classifier to distinguish five species of birds. Their dataset contains 50,000 photographs, but the classes are heavily imbalanced: one species accounts for 55% of the images while the rarest represents only 4%. The model obtains 88% overall accuracy, yet recall for the rarest species is only 41%. Training accuracy continues increasing while validation accuracy stops improving after epoch 12. The team currently uses standard cross-entropy loss, random train-validation splitting, and basic image resizing without augmentation. They have enough compute to run several additional experiments but cannot collect more labeled images before the deadline. Recommend changes to the training and evaluation pipeline and explain why they should improve performance. Respond in approximately 200 words."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "balanced_05",
+      "category": "balanced",
+      "messages": [
+        {
+          "role": "user",
+          "content": "A coastal city experiences severe flooding several times each monsoon season. Over the last twenty years, rapid construction has replaced many open fields and wetlands with roads, apartments, and commercial buildings. The drainage network was designed decades ago for a much smaller population and frequently becomes clogged with debris. Climate records also show an increase in short periods of extremely heavy rainfall. City officials are considering widening storm drains, restoring wetlands, constructing underground retention tanks, introducing permeable pavements, and restricting new development in flood-prone areas. They have enough funding to implement only some measures immediately. Write a 180-220 word recommendation that combines short-term flood protection with a longer-term strategy."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "balanced_06",
+      "category": "balanced",
+      "messages": [
+        {
+          "role": "user",
+          "content": "A software company has a monolithic web application used by approximately two million users. Deployments currently occur once every two weeks and require about thirty minutes of downtime. The application contains authentication, billing, search, notifications, analytics, and user-profile functionality in a single codebase and database. Engineering teams frequently block one another because unrelated features must pass the same integration tests before deployment. Management proposes immediately splitting the entire application into microservices. Several senior engineers argue that doing so would introduce networking, observability, deployment, and data-consistency complexity. Evaluate both positions and recommend a migration strategy that improves deployment independence without creating unnecessary operational complexity. Answer in about 220 words."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "balanced_07",
+      "category": "balanced",
+      "messages": [
+        {
+          "role": "user",
+          "content": "A country generates 65% of its electricity from coal, 15% from natural gas, 10% from hydroelectric power, 7% from solar and wind, and 3% from nuclear power. Electricity demand is expected to grow by roughly 40% over the next fifteen years. The government wants to cut power-sector carbon emissions while maintaining reliable electricity and avoiding large increases in consumer prices. Solar and wind costs have fallen quickly, but the transmission grid is weak and large-scale energy storage remains expensive. Existing coal plants employ tens of thousands of workers. Develop a balanced transition strategy covering generation, grid infrastructure, reliability, and economic effects on workers. Keep the response between 180 and 230 words."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "balanced_08",
+      "category": "balanced",
+      "messages": [
+        {
+          "role": "user",
+          "content": "An LLM inference service hosts a single transformer model on one GPU. Monitoring shows that requests with long prompts spend most of their initial latency in the prefill phase, while requests that generate hundreds of tokens spend most of their execution time in autoregressive decoding. The service currently processes requests sequentially. GPU utilization is high during large prompt processing but frequently drops during token-by-token generation. Product traffic includes both short chatbot requests and occasional long-document summarization jobs. The engineering team is considering continuous batching, prefix caching, paged KV-cache management, and separating prefill and decode onto different workers. Explain which optimizations you would implement first and why. Discuss the expected effect on throughput, latency, and GPU utilization in approximately 220 words."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "balanced_09",
+      "category": "balanced",
+      "messages": [
+        {
+          "role": "user",
+          "content": "A fictional crew is traveling to a research base on Mars when their communications system begins receiving messages apparently sent by their own spacecraft twelve hours in the future. The messages correctly predict several minor equipment failures, convincing most of the crew that they are genuine. The captain wants to follow the future messages exactly, while the chief engineer worries that doing so could create the events being predicted. Meanwhile, the next message warns of a catastrophic reactor failure but provides instructions that require shutting down life support for seven minutes. Continue the story for approximately 250 words. Focus on the crew's decision and end with a surprising but logically consistent discovery."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 0.95
+    },
+    {
+      "id": "balanced_10",
+      "category": "balanced",
+      "messages": [
+        {
+          "role": "user",
+          "content": "A small bank is modernizing a fraud-detection system that currently relies on manually written rules such as transaction amount thresholds, unusual locations, and repeated failed payment attempts. The rules catch many obvious cases but also generate large numbers of false positives, causing legitimate customer cards to be blocked. The bank has several years of historical transaction data including confirmed fraud labels, merchant categories, transaction values, locations, timestamps, and customer spending histories. Fraud represents less than 0.5% of transactions. Regulators require the bank to explain why suspicious transactions are flagged and to monitor whether the system treats customer groups unfairly. Propose a machine-learning approach, suitable evaluation metrics, and deployment safeguards in about 220 words."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "prefill_01",
+      "category": "prefill_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Read the following production incident report and identify the primary root cause in one sentence.\n\nINCIDENT REPORT\n\nAt 09:42 UTC, monitoring detected an increase in HTTP 5xx responses from the checkout API. The service normally handles approximately 3,500 requests per second with a p95 latency below 180 ms. Within six minutes, p95 latency exceeded 2.4 seconds and the error rate reached 17%. Traffic volume was only 8% above the weekly average, and no marketing campaigns or external traffic events were active.\n\nThe checkout service runs across 24 Kubernetes pods. CPU utilization remained between 38% and 52%, and memory consumption remained stable. Autoscaling therefore did not add additional replicas. Network metrics showed no packet loss or unusual cross-zone traffic. The payment provider reported normal availability throughout the incident.\n\nEngineers initially suspected PostgreSQL because database connection usage increased from 46% to 91%. Query latency, however, remained mostly unchanged. Examination of application traces showed requests spending increasing amounts of time waiting to obtain database connections rather than executing queries. Several checkout operations that normally held a connection for less than 40 ms were holding one for more than a second.\n\nA deployment at 09:31 UTC had introduced a new inventory-verification step. Previously, the application queried inventory, released its database connection, and then contacted the remote warehouse service. The new implementation opened a transaction, queried inventory, called the warehouse service while the transaction remained open, updated the reservation status, and finally committed the transaction.\n\nThe warehouse service itself had a typical median response time of 90 ms but occasionally required 800-1500 ms for requests involving older warehouses. These slow calls now caused checkout workers to retain database connections throughout the network wait. As concurrent requests accumulated, the PostgreSQL connection pool became exhausted. New requests then waited for connections, increasing request duration further and creating a feedback loop.\n\nAt 10:07 UTC engineers rolled back the deployment. Connection utilization fell below 50% within four minutes, and checkout latency returned to normal by 10:14 UTC. No database configuration, indexes, Kubernetes resources, or warehouse infrastructure were changed during recovery.\n\nA follow-up load test reproduced the incident whenever remote warehouse latency exceeded approximately 600 ms. Moving the remote warehouse request outside the database transaction eliminated the connection exhaustion even when artificial warehouse latency was increased to two seconds.\n\nQuestion: What was the primary root cause of the incident? Answer in one sentence."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "prefill_02",
+      "category": "prefill_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Read the following software services agreement excerpt and answer only the question at the end.\n\nThe agreement begins on January 1, 2027 and continues for an initial term of twenty-four months. Unless either party provides written notice at least sixty days before expiration of the initial term, the agreement automatically renews for successive twelve-month periods. Fees for renewed periods may increase by no more than five percent relative to the immediately preceding period unless both parties agree otherwise in writing.\n\nThe provider will maintain monthly availability of at least 99.9%, excluding scheduled maintenance announced at least forty-eight hours in advance. Scheduled maintenance may not exceed four hours during any calendar month. If availability falls below 99.9% but remains at or above 99.0%, the customer receives a service credit equal to ten percent of the affected month's recurring fee. Availability below 99.0% results in a twenty-five percent credit. Service credits are the customer's sole monetary remedy for availability failures except where the failure results from gross negligence or intentional misconduct.\n\nCustomer data remains the property of the customer. The provider may process customer data solely to deliver, secure, maintain, and improve the contracted service. The provider may not sell customer data or use it to train a generally available machine-learning model without separate written permission. Backups may be retained for up to ninety days following deletion from the production environment.\n\nEither party may terminate the agreement for material breach if the breaching party fails to cure the breach within thirty days after receiving written notice describing the breach. The customer may also terminate immediately if the provider experiences a data breach caused by gross negligence, becomes insolvent, ceases substantial business operations, or repeatedly fails the availability commitment in three consecutive months.\n\nIn addition, beginning twelve months after the effective date, the customer may terminate the agreement for convenience by providing ninety days of written notice. If the customer exercises termination for convenience before completion of the initial twenty-four-month term, it must pay fifty percent of the recurring fees that would otherwise have become due between the effective termination date and the end of the initial term. No early termination fee applies when termination results from an uncured material breach by the provider.\n\nUpon termination, the provider will make customer data available for export for thirty days. After this export period, production copies may be deleted, although encrypted backups may remain for the retention period described above. Outstanding invoices for services already delivered remain payable.\n\nQuestion: After the first twelve months, how much notice must the customer give to terminate for convenience? Return only the duration."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "prefill_03",
+      "category": "prefill_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Read the research summary and report the experiment configuration that achieved the lowest validation error.\n\nA research group evaluated techniques for reducing inference cost in a transformer-based image classifier. The baseline model contained 24 transformer blocks, embedding width 1024, 16 attention heads, and approximately 305 million parameters. It achieved a validation error of 11.8% while requiring 58.4 GFLOPs per image.\n\nThe first experiment applied unstructured magnitude pruning to linear layers. Removing 20% of weights produced 12.0% validation error and did not materially improve wall-clock inference because the hardware executed the resulting sparse tensors inefficiently. At 40% sparsity, validation error increased to 13.7%. Researchers therefore did not pursue higher unstructured sparsity levels.\n\nThe second experiment removed complete transformer blocks. Removing the final two blocks reduced compute to 53.7 GFLOPs and produced 11.9% validation error after five epochs of fine-tuning. Removing four blocks reduced compute to 48.9 GFLOPs but increased error to 12.6%. Removing every second block performed significantly worse, reaching 15.2% error despite using a similar number of layers, suggesting that layer position mattered.\n\nA third set of experiments reduced attention heads. Keeping 12 of the original 16 heads in every layer yielded an error of 11.7% and compute of 52.1 GFLOPs. Keeping eight heads yielded 12.4% error. Combining 12 heads with removal of the final two transformer blocks reduced compute to 47.5 GFLOPs and produced 11.6% validation error after ten epochs of fine-tuning.\n\nResearchers then tested knowledge distillation. The student was initialized from the pruned model and trained using a weighted combination of ground-truth cross-entropy and KL divergence from the original model. With a distillation temperature of 2 and teacher-loss weight of 0.3, validation error fell to 11.2%. Increasing the teacher-loss weight to 0.6 produced an error of 11.0%. Using temperature 4 with weight 0.6 produced 11.3% error.\n\nThe best final experiment combined removal of the final two transformer blocks, reduction from 16 to 12 attention heads, and distillation at temperature 2 with teacher-loss weight 0.6. This configuration required 47.5 GFLOPs and achieved 11.0% validation error. A more aggressive configuration removing four blocks and retaining 12 heads required only 42.8 GFLOPs but achieved 11.9% error even with distillation.\n\nQuestion: Give the architecture changes and distillation settings of the configuration with the lowest validation error. Use no more than two sentences."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "prefill_04",
+      "category": "prefill_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Analyze the following condensed infrastructure log and identify the component most directly responsible for the outage.\n\n08:14:02 gateway-3 request_rate=1840/s p95=122ms errors=0.2%\n08:14:10 api-12 cpu=43% mem=61% threads=88/256\n08:14:12 redis-primary ops=48211/s hit_rate=94.7% mem=68%\n08:14:15 postgres-primary connections=146/500 query_p95=18ms\n08:15:01 deploy-controller release=2026.09.06-rc4 status=complete\n08:15:11 gateway-1 request_rate=1875/s p95=128ms errors=0.2%\n08:15:20 api-07 cpu=47% mem=62% threads=91/256\n08:16:04 catalog-service cache_refresh_started=true\n08:16:07 redis-primary ops=51580/s hit_rate=93.9% mem=69%\n08:16:12 postgres-primary connections=152/500 query_p95=19ms\n08:17:31 catalog-service refresh_items=148230 elapsed=87s\n08:18:00 gateway-2 request_rate=1892/s p95=141ms errors=0.3%\n08:18:20 api-14 cpu=49% mem=64% threads=96/256\n08:19:03 redis-primary evicted_keys=0 hit_rate=93.5%\n08:19:44 search-indexer batch_started documents=50000\n08:20:10 search-indexer heap=71% cpu=76%\n08:20:21 elasticsearch-node-2 cpu=64% heap=68% disk=52%\n08:21:04 gateway-1 p95=158ms errors=0.4%\n08:21:30 kafka-orders consumer_lag=123\n08:22:00 payment-worker pending=46 normal_range=20-80\n08:22:42 postgres-primary connections=168/500 query_p95=21ms\n08:23:11 auth-service token_p95=14ms errors=0.01%\n08:24:00 redis-primary hit_rate=92.8% ops=53750/s\n08:24:50 gateway-3 p95=167ms errors=0.5%\n08:25:07 catalog-service cache_refresh_complete=true\n08:25:34 search-indexer batch_complete documents=50000\n08:26:20 object-store upload_p95=84ms errors=0.0%\n08:27:02 api-09 cpu=51% mem=65% threads=102/256\n08:28:15 postgres-replica-1 replication_lag=0.6s\n08:29:40 kafka-orders consumer_lag=176\n08:30:02 gateway-2 p95=172ms errors=0.4%\n08:31:13 feature-service config_reload_started=true version=441\n08:31:14 feature-service ERROR parser invalid_rule line=1842 token='=>'\n08:31:14 feature-service WARN keeping_previous_config=false\n08:31:15 feature-service active_rules=0\n08:31:18 api-03 dependency=feature-service errors=18%\n08:31:19 api-04 dependency=feature-service errors=22%\n08:31:21 gateway-1 errors=9.4% p95=480ms\n08:31:26 gateway-2 errors=17.1% p95=612ms\n08:31:30 feature-service requests=11422/s responses_default=100%\n08:31:38 checkout-api incorrect_price_flags=3821\n08:31:42 recommendation-api empty_feature_vectors=91%\n08:31:50 api-08 cpu=44% mem=64%\n08:32:01 postgres-primary connections=174/500 query_p95=20ms\n08:32:04 redis-primary hit_rate=93.1%\n08:32:10 gateway-3 errors=24.8%\n08:32:30 oncall incident_declared severity=SEV1\n08:34:11 feature-service rollback_config version=440\n08:34:13 feature-service active_rules=3874\n08:34:18 api-03 dependency_errors=2.1%\n08:34:26 gateway-1 errors=4.0%\n08:35:02 gateway-2 errors=0.7% p95=191ms\n08:36:10 incident status=recovered\n\nQuestion: Which component most directly caused the outage, and what failed? Answer in one sentence."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "prefill_05",
+      "category": "prefill_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Read the following quarterly operating memo and identify the largest contributor to year-over-year revenue growth.\n\nThe company reported quarterly revenue of $428 million, up 18% from $363 million in the same quarter last year. Gross margin increased from 61.8% to 64.2%, primarily because infrastructure costs per transaction declined and enterprise customers represented a larger share of revenue.\n\nConsumer subscriptions generated $146 million compared with $137 million last year, an increase of $9 million. Subscriber count increased 11%, although average revenue per subscriber declined slightly because of expansion into lower-priced international markets.\n\nSmall-business subscriptions generated $92 million, compared with $81 million a year earlier, contributing $11 million of incremental revenue. Management noted strong adoption of the new team collaboration package but also reported elevated churn among businesses with fewer than five employees.\n\nEnterprise subscriptions increased from $89 million to $123 million, adding $34 million year over year. The number of enterprise customers spending more than $100,000 annually increased 27%. Management attributed most of this growth to multi-year security and data-governance contracts signed by regulated financial and healthcare companies.\n\nUsage-based API revenue increased from $31 million to $46 million, contributing $15 million of incremental revenue. API token volume increased 42%, while average price per token declined because larger customers moved to committed-use contracts.\n\nProfessional services revenue grew from $18 million to $21 million, adding $3 million. Hardware and miscellaneous revenue was unchanged at approximately $6 million.\n\nGeographically, North American revenue grew 14%, Europe grew 21%, and Asia-Pacific grew 31% from a smaller base. Currency movements reduced reported revenue growth by approximately one percentage point.\n\nOperating expenses rose 13%, slower than revenue, resulting in an operating margin of 16.4% compared with 12.1% last year. Research and development remained the largest operating expense category. Sales and marketing expense increased only 7% as the company shifted more enterprise renewals to an internal account-management team.\n\nManagement expects next-quarter revenue between $438 million and $446 million. Risks highlighted include slower small-business hiring, energy costs for inference infrastructure, and possible delays in two large government contracts.\n\nQuestion: Which business segment contributed the largest absolute amount of year-over-year revenue growth, and by how much? Answer briefly."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "prefill_06",
+      "category": "prefill_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Read the following internal access-control policy and determine whether the described access request should be approved.\n\nProduction systems are divided into Restricted, Confidential, and Standard environments. Customer payment data, authentication secrets, encryption keys, and raw identity documents are classified as Restricted. Customer-generated application data is generally Confidential unless a separate classification applies.\n\nEmployees may receive Standard access when required by their assigned team. Confidential production access requires manager approval and completion of annual security training. Restricted production access additionally requires approval from the system owner and Security Engineering. Access must follow least-privilege principles and expire when the underlying business requirement ends.\n\nContractors may access Standard and Confidential systems when access is explicitly required by their statement of work. Contractors are prohibited from receiving standing administrative access to Restricted systems. Temporary Restricted access may be granted only for a specific incident, must be supervised by an employee with permanent authorization, and expires after four hours unless Security Engineering approves an extension.\n\nAll production access must use company-managed identities with phishing-resistant multi-factor authentication. Shared accounts are prohibited. Credentials must not be transmitted through email, chat messages, ticket comments, or source-code repositories.\n\nEngineers on the database reliability team maintain PostgreSQL clusters containing Confidential application data. They may receive read-write database privileges when on call. Direct access to tables containing raw payment card information remains Restricted and requires the additional approvals described above.\n\nAccess reviews occur every ninety days. Managers must remove privileges belonging to employees who change teams unless the new role independently requires them. Human Resources triggers immediate account suspension when employment ends. Contractor accounts automatically expire at the end date stored in the vendor-management system.\n\nEmergency access may bypass normal manager approval when a Severity 1 incident threatens customer availability or data integrity. Emergency access must still use an individual managed identity, is logged continuously, expires after the incident, and must receive retrospective review within one business day.\n\nScenario: A database contractor's six-month engagement ended yesterday. Today an engineer discovers that the contractor wrote a migration tool that only the contractor fully understands. The team wants to reactivate the contractor's old account for seven days so the contractor can investigate a performance issue. The issue is causing elevated latency but has not been declared a Severity 1 incident. The requested account would have read-write access to Confidential production databases. The engineering manager has approved the request, but no new statement of work has been signed and the vendor-management system still lists the engagement as ended.\n\nQuestion: Under the stated policy, should the old account be reactivated? Answer yes or no followed by one short reason."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "prefill_07",
+      "category": "prefill_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Analyze the following condensed collection of customer feedback for a developer platform. Identify the single most common product complaint.\n\nCustomer 01: Deployment itself is fast, but build logs disappear after seven days, which makes debugging older failures painful.\nCustomer 02: Love the CLI. Main problem is that cold starts on Python services are frequently above four seconds.\nCustomer 03: Billing dashboard is confusing when several projects share the same organization.\nCustomer 04: We need longer log retention. A production issue from two weeks ago became nearly impossible to investigate.\nCustomer 05: GitHub integration works well, although pull-request previews sometimes take too long to provision.\nCustomer 06: Please let us retain logs for at least thirty days without exporting everything ourselves.\nCustomer 07: Database provisioning is fantastic. We would like larger Redis instances.\nCustomer 08: Cold starts improved recently but are still noticeable for low-traffic functions.\nCustomer 09: Our biggest issue is logs. Seven days is nowhere near enough for incident investigation.\nCustomer 10: Organization permissions need more granular roles.\nCustomer 11: The new usage page is excellent. Would still like cost alerts per project.\nCustomer 12: Build logs should have configurable retention. Losing them after a week has caused several problems for our team.\nCustomer 13: Deployment from GitHub occasionally gets stuck after a force push.\nCustomer 14: Python startup latency is the main reason we moved one service elsewhere.\nCustomer 15: Would love private networking between projects in different organizations.\nCustomer 16: Log search is good, but retention is too short. Thirty or ninety days would be much more useful.\nCustomer 17: The CLI authentication flow breaks on headless development machines.\nCustomer 18: Support was helpful. My only complaint is not being able to inspect logs from incidents that happened more than a week ago.\nCustomer 19: Please add SAML to the mid-tier plan.\nCustomer 20: Cold starts are inconsistent, especially after deployments.\nCustomer 21: The documentation for custom domains could be clearer.\nCustomer 22: Seven-day logs are a serious limitation for compliance investigations.\nCustomer 23: Billing export should include project tags.\nCustomer 24: Preview environments are one of our favorite features.\nCustomer 25: We regularly need logs from ten to fourteen days ago and currently have to ship them to another provider.\nCustomer 26: Python cold starts remain somewhat slow but not a blocker anymore.\nCustomer 27: Role-based access control is missing a read-only billing role.\nCustomer 28: We need longer application and build log history inside the dashboard.\nCustomer 29: Database backups are simple and reliable.\nCustomer 30: Our team wastes time maintaining a separate logging pipeline purely because native retention is too short.\nCustomer 31: Usage alerts arrived several hours late last month.\nCustomer 32: GitHub deployments are normally seamless.\nCustomer 33: Longer log retention would immediately make the platform more useful for us.\nCustomer 34: The API rate limits are difficult to understand.\nCustomer 35: Our security team requires at least thirty days of searchable operational logs.\nCustomer 36: Serverless startup time is occasionally high.\nCustomer 37: Build caching saved us a lot of time.\nCustomer 38: Logs disappearing after seven days is our number one complaint.\nCustomer 39: We need more regions in South America.\nCustomer 40: Native log retention should be configurable by plan.\n\nQuestion: What is the single most common complaint? Answer with a short noun phrase."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "prefill_08",
+      "category": "prefill_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Read the benchmark report and identify which configuration gives the best decode throughput without exceeding 20 GB peak VRAM.\n\nAn inference team tested seven configurations of the same 7-billion-parameter transformer on one GPU. All tests used the same 512-token prompt, generated 256 new tokens, ran after warmup, and used batch size four. Each configuration was measured five times and the median is reported.\n\nConfiguration A used FP32 weights, standard attention, and a dynamically growing KV cache. Peak VRAM was 31.4 GB. Prefill throughput was 3,120 tokens/s and decode throughput was 71 tokens/s.\n\nConfiguration B used FP16 weights with standard attention and a dynamic KV cache. Peak VRAM fell to 18.9 GB. Prefill throughput increased to 6,480 tokens/s and decode throughput reached 119 tokens/s.\n\nConfiguration C used FP16 weights, scaled-dot-product attention, and a dynamic KV cache. Peak VRAM was 18.7 GB. Prefill throughput increased to 8,940 tokens/s and decode throughput reached 124 tokens/s.\n\nConfiguration D used FP16 weights, scaled-dot-product attention, and a preallocated KV cache. Peak VRAM was 19.6 GB. Prefill throughput was 9,010 tokens/s and decode throughput reached 139 tokens/s.\n\nConfiguration E used BF16 weights, scaled-dot-product attention, and a preallocated KV cache. Peak VRAM was 19.8 GB. Prefill throughput was 8,870 tokens/s and decode throughput was 137 tokens/s.\n\nConfiguration F used FP16 weights, scaled-dot-product attention, a preallocated KV cache, and CUDA graph capture. Peak VRAM increased to 21.3 GB. Prefill throughput reached 9,180 tokens/s and decode throughput reached 161 tokens/s.\n\nConfiguration G used INT8 weight-only quantization, scaled-dot-product attention, and a preallocated KV cache. Peak VRAM was 13.2 GB. Prefill throughput was 8,210 tokens/s and decode throughput reached 145 tokens/s. Accuracy evaluation showed a small but measurable degradation relative to the FP16 baseline.\n\nThe team emphasized that configurations should not be ranked using a combined tokens-per-second number because prefill and decode exercise the hardware differently. They also noted that CUDA graph capture adds static memory overhead, while quantization changes both memory traffic and numerical behavior.\n\nQuestion: Among configurations whose peak VRAM is at most 20 GB, which has the highest decode throughput? Return only the configuration letter and decode throughput."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    },
+    {
+      "id": "prefill_09",
+      "category": "prefill_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Read the meeting notes and state the final deployment decision.\n\n09:00 — Maya opens the release review. Version 3.8 contains the new search ranking model, redesigned account settings, and database connection-pool changes. The proposed production deployment is Thursday afternoon.\n\n09:05 — Search team reports that offline ranking metrics improved by 6.3%. An A/B test involving 10% of users showed a 2.1% increase in successful searches and no statistically significant increase in latency.\n\n09:12 — Frontend team reports that the account-settings redesign passed browser testing. One minor Safari rendering issue remains but affects only the alignment of an informational icon. The team considers it non-blocking.\n\n09:18 — Database team discusses connection-pool changes. Staging tests at normal load were successful. During a stress test at approximately four times normal traffic, however, several services exhausted their local connection pools. Increasing the pool size removed the application errors but pushed database connection usage close to the configured server limit.\n\n09:24 — Ravi suggests deploying the search and frontend changes while disabling the connection-pool changes behind a configuration flag. Lena argues that splitting the release could complicate rollback because all three changes currently share a migration bundle.\n\n09:31 — The migration owner confirms that the search model does not require a database migration. Account settings adds one nullable column but remains backward-compatible. The connection-pool change does not modify schema at all. Therefore the release can technically be separated.\n\n09:37 — Operations recommends against deploying the connection-pool change until another load test is performed with production-like service counts. They are comfortable with the search and account-settings changes.\n\n09:41 — Product asks whether delaying everything until Monday would materially reduce risk. Search team notes that a marketing campaign begins Friday and would benefit from the improved ranking model.\n\n09:46 — Maya proposes deploying search ranking and account settings on Thursday, leaving the existing database connection-pool behavior unchanged. The connection-pool change would move to a separate release after stress testing.\n\n09:49 — Ravi agrees. Lena agrees provided the migration for the nullable account column is applied independently and verified before application rollout. Operations agrees and offers to monitor database connections during deployment.\n\n09:53 — Final decision recorded: release 3.8 will be split. Search ranking and account settings will deploy Thursday as 3.8a. The connection-pool modification is removed from that deployment and becomes 3.8b, with no production date until the new load test passes. The account-settings migration will run first and must complete successfully before the application rollout begins.\n\n09:56 — Meeting ends.\n\nQuestion: What will be deployed Thursday, and what will be postponed? Answer in one sentence."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 0.95
+    },
+    {
+      "id": "prefill_10",
+      "category": "prefill_heavy",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Read the following operations handbook excerpt and answer the question at the end.\n\nThe company operates three severity levels for customer-facing incidents. Severity 1 incidents involve widespread unavailability, confirmed loss of customer data, a security compromise affecting production credentials, or failure of a critical service with no available workaround. Severity 2 incidents cause significant degradation for a subset of customers or failure of an important feature where a workaround exists. Severity 3 incidents include minor defects, intermittent problems with limited impact, and internal operational issues that do not materially affect customers.\n\nFor Severity 1 incidents, the on-call engineer must create an incident channel within five minutes of classification, appoint an incident commander, and page the relevant service owner. An executive liaison is required when the event lasts longer than thirty minutes. Public status communication should occur within fifteen minutes of confirming customer impact and should be updated at least every thirty minutes while the incident remains active.\n\nFor Severity 2 incidents, an incident channel must be created within fifteen minutes. A dedicated incident commander is recommended but not mandatory when a single team owns the affected system. Public communication is required only when customer impact is expected to continue for more than one hour or when Support requests a notice because of high ticket volume.\n\nSeverity 3 incidents may be managed through the normal issue tracker. Teams should escalate the severity if new evidence indicates wider impact.\n\nDatabase corruption, deletion of customer records, or irreversible processing errors must immediately involve the data reliability team regardless of severity. Suspected exposure of authentication secrets or customer personal information must immediately involve Security Engineering. Engineers should preserve logs and avoid destructive remediation until evidence needed for investigation has been captured.\n\nDuring mitigation, restoring service takes priority over identifying the complete root cause. Changes made during an incident should be minimal, reversible where possible, and documented in the incident timeline. Once customer impact has ended, monitoring should continue for at least thirty minutes before the incident is marked resolved.\n\nA written post-incident review is mandatory for every Severity 1 event and for Severity 2 events lasting more than four hours. The review must describe customer impact, detection, timeline, contributing factors, root cause where known, mitigation, and follow-up actions. The purpose of the review is organizational learning rather than individual blame.\n\nScenario: A configuration error causes the main API to become unavailable to approximately 80% of customers. There is no workaround. The outage begins at 14:02 and is confirmed at 14:06. Engineers classify it as Severity 1 at 14:08. The incident remains active for forty-five minutes.\n\nQuestion: By what time should the first public status communication be issued according to the handbook? Return only the time."
+        }
+      ],
+      "max_tokens": 1024,
+      "temperature": 0.2,
+      "top_p": 1.0
+    }
+  ]
+}

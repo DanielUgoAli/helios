@@ -156,6 +156,24 @@ class RequestSpec:
     messages: tuple[Message, ...]
 
 
+_WARMUP_MESSAGES = (
+    (
+        "user",
+        "This is a benchmark warmup request. Reply with the single word ready.",
+    ),
+)
+WARMUP_REQUEST = RequestSpec(
+    workload=Workload(
+        name="warmup",
+        description="First controlled request after the server health check.",
+        input=_WARMUP_MESSAGES,
+        max_new_tokens=8,
+    ),
+    phase="post-health",
+    messages=_WARMUP_MESSAGES,
+)
+
+
 def requests_for(workload: Workload) -> tuple[RequestSpec, ...]:
     if not workload.tool_exchanges:
         return (RequestSpec(workload, "uncached", workload.input),)
