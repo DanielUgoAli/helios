@@ -145,15 +145,41 @@ class Scheduler(Generic[Payload, Result]):
             self._condition.wait(remaining)
 
     def _promote(self) -> tuple[Job[Payload, Result], ...]:
-        first = self._waiting.popleft()
-        active = [first]
-        if not first.batchable:
-            return tuple(active)
-        while self._waiting and len(active) < self._max_batch_size:
-            candidate = self._waiting[0]
-            if not candidate.batchable or not self._can_add(tuple(active), candidate):
-                break
-            active.append(self._waiting.popleft())
+        waiting = tuple(self._waiting)
+        first = waiting[0]
+        if not first.batchable or self._max_batch_size == 1:
+            self._waiting.popleft()
+            return (first,)
+
+        deadline = first.enqueued_at + self._batch_wait_seconds
+        if time.perf_counter() >= deadline:
+            selected = self._build_batch(first, waiting)
+        else:
+            selected = max(
+                (
+                    self._build_batch(seed, waiting)
+                    for seed in waiting
+                    if seed.batchable
+                ),
+                key=lambda batch: len(batch),
+            )
+        selected_ids = {id(job) for job in selected}
+        self._waiting = deque(job for job in waiting if id(job) not in selected_ids)
+        return selected
+
+    def _build_batch(
+        self, seed: Job[Payload, Result], waiting: tuple[Job[Payload, Result], ...]
+    ) -> tuple[Job[Payload, Result], ...]:
+        active = [seed]
+        for candidate in waiting:
+            if (
+                candidate is seed
+                or not candidate.batchable
+                or len(active) >= self._max_batch_size
+                or not self._can_add(tuple(active), candidate)
+            ):
+                continue
+            active.append(candidate)
         return tuple(active)
 
     def _discard_cancelled(self) -> None:

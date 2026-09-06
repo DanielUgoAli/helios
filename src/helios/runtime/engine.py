@@ -58,6 +58,7 @@ class Engine:
             max_queue_size=config.max_queue_size,
             batch_wait_seconds=config.batch_wait_ms / 1_000,
         )
+        self._batch_shape_ratio = config.batch_shape_ratio
 
     def update_cache_capacity(
         self,
@@ -226,11 +227,33 @@ class Engine:
         if len(typed_requests) == 1:
             return (self._run_one(typed_requests[0], queue_seconds[0]),)
         with self._generation_lock:
+            prompt_lengths = [len(request.input_ids) for request in typed_requests]
+            output_limits = [
+                request.sampling.max_new_tokens for request in typed_requests
+            ]
+            padded_tokens = len(typed_requests) * (
+                max(prompt_lengths) + max(output_limits)
+            )
+            useful_tokens = sum(
+                prompt_length + output_limit
+                for prompt_length, output_limit in zip(
+                    prompt_lengths, output_limits, strict=True
+                )
+            )
             logger.info(
-                "batch_running batch_size=%d request_ids=%s queue_ms=%s",
+                "batch_running batch_size=%d request_ids=%s queue_ms=%s "
+                "prompt_tokens=%d-%d output_limits=%d-%d padded_tokens=%d "
+                "useful_tokens=%d padding_efficiency=%.3f",
                 len(typed_requests),
                 ",".join(request.request_id for request in typed_requests),
                 ",".join(f"{seconds * 1_000:.1f}" for seconds in queue_seconds),
+                min(prompt_lengths),
+                max(prompt_lengths),
+                min(output_limits),
+                max(output_limits),
+                padded_tokens,
+                useful_tokens,
+                useful_tokens / padded_tokens,
             )
             results = self.generator.run_scheduled_batch(
                 [request.input_ids for request in typed_requests],
@@ -322,11 +345,18 @@ class Engine:
             return False
         longest_prompt = max(len(request.input_ids) for request in requests)
         max_new_tokens = max(request.sampling.max_new_tokens for request in requests)
+        shortest_prompt = min(len(request.input_ids) for request in requests)
+        shortest_max_new_tokens = min(
+            request.sampling.max_new_tokens for request in requests
+        )
         capacity = longest_prompt + max_new_tokens
         max_total_tokens = (
             self.generator.cache.kv_budget_bytes // self.generator.cache.bytes_per_token
         )
         return (
-            capacity <= self.generator.decoder.model.config.context_length
+            longest_prompt <= shortest_prompt * self._batch_shape_ratio
+            and max_new_tokens
+            <= shortest_max_new_tokens * self._batch_shape_ratio
+            and capacity <= self.generator.decoder.model.config.context_length
             and len(requests) * capacity <= max_total_tokens
         )
