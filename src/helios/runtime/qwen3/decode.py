@@ -32,6 +32,35 @@ class BatchDecodeResult:
     decode_seconds: float = 0.0
 
 
+@dataclass
+class PrefillResult:
+    cache: KVCache
+    logits: torch.Tensor
+    prefill_seconds: float
+    restore_seconds: float
+    restored_tokens: int
+
+
+@dataclass
+class DecodedTokens:
+    output_ids: list[int]
+    finish_reason: str
+    inter_token_seconds: list[float]
+
+
+@dataclass
+class BatchPrefillResult:
+    cache: KVCache
+    logits: torch.Tensor
+    prompt_lengths: torch.Tensor
+    key_mask: torch.Tensor
+    token_limits: torch.Tensor
+    sampling: Sampling
+    max_new_tokens: int
+    started: float
+    prefill_seconds: float
+
+
 class Decoder:
     def __init__(self, model: Qwen3Model, *, torch_compile: bool = False) -> None:
         self.model = model
@@ -56,6 +85,31 @@ class Decoder:
         prefix_hit: PrefixCacheHit | None = None,
         request_id: str = "internal",
     ) -> DecodeResult:
+        prefill = self.prefill(
+            input_ids,
+            sampling,
+            max_total_tokens=max_total_tokens,
+            prefix_hit=prefix_hit,
+        )
+        decoded = self.decode(prefill, eos_token_id, sampling, request_id=request_id)
+        return DecodeResult(
+            output_ids=decoded.output_ids,
+            finish_reason=decoded.finish_reason,
+            prefill_seconds=prefill.prefill_seconds,
+            inter_token_seconds=decoded.inter_token_seconds,
+            restore_seconds=prefill.restore_seconds,
+            restored_tokens=prefill.restored_tokens,
+            cache=prefill.cache,
+        )
+
+    def prefill(
+        self,
+        input_ids: list[int],
+        sampling: Sampling,
+        *,
+        max_total_tokens: int,
+        prefix_hit: PrefixCacheHit | None = None,
+    ) -> PrefillResult:
         capacity = len(input_ids) + sampling.max_new_tokens
         if capacity > max_total_tokens:
             raise ValueError(
@@ -89,29 +143,43 @@ class Decoder:
         token_tensor = torch.tensor(
             input_ids[cache.length :], device=self.device
         ).unsqueeze(0)
-        generated: list[int] = []
-        inter_token_seconds: list[float] = []
-        finish_reason = "length"
-        prefill_seconds = 0.0
         self.model.eval()
         with torch.inference_mode():
             self._synchronize()
             started = time.perf_counter()
             forward_logits = self._forward(token_tensor, cache=cache)
             self._validate_forward_shapes(token_tensor, forward_logits)
-            logits = forward_logits[:, -1, :]
+            self._synchronize()
+            prefill_seconds = time.perf_counter() - started
+        return PrefillResult(
+            cache=cache,
+            logits=forward_logits[:, -1, :],
+            prefill_seconds=prefill_seconds,
+            restore_seconds=restore_seconds,
+            restored_tokens=restored_tokens,
+        )
+
+    def decode(
+        self,
+        prefill: PrefillResult,
+        eos_token_id: int,
+        sampling: Sampling,
+        *,
+        request_id: str = "internal",
+    ) -> DecodedTokens:
+        generated: list[int] = []
+        inter_token_seconds: list[float] = []
+        finish_reason = "length"
+        logits = prefill.logits
+        cache = prefill.cache
+        self.model.eval()
+        with torch.inference_mode():
             for index in range(sampling.max_new_tokens):
                 next_token = self._sample(logits, sampling)
-                self._synchronize()
-                elapsed = time.perf_counter() - started
-                if index == 0:
-                    prefill_seconds = elapsed
                 token_id = next_token.item()
                 if token_id == eos_token_id:
                     finish_reason = "eos"
                     break
-                if index > 0:
-                    inter_token_seconds.append(elapsed)
                 generated.append(token_id)
                 generated_tokens = len(generated)
                 if (
@@ -124,22 +192,21 @@ class Decoder:
                         request_id,
                         generated_tokens,
                         sampling.max_new_tokens,
-                        elapsed * 1_000,
+                        (prefill.prefill_seconds if index == 0 else inter_token_seconds[-1])
+                        * 1_000,
                     )
                 if index + 1 < sampling.max_new_tokens:
                     self._synchronize()
                     started = time.perf_counter()
                     forward_logits = self._forward(next_token, cache=cache)
                     self._validate_forward_shapes(next_token, forward_logits)
+                    self._synchronize()
+                    inter_token_seconds.append(time.perf_counter() - started)
                     logits = forward_logits[:, -1, :]
-        return DecodeResult(
+        return DecodedTokens(
             output_ids=generated,
             finish_reason=finish_reason,
-            prefill_seconds=prefill_seconds,
             inter_token_seconds=inter_token_seconds,
-            restore_seconds=restore_seconds,
-            restored_tokens=restored_tokens,
-            cache=cache,
         )
 
     def generate_batch(
@@ -150,6 +217,22 @@ class Decoder:
         *,
         max_total_tokens: int,
     ) -> BatchDecodeResult:
+        prefill = self.prefill_batch(
+            input_ids,
+            eos_token_id,
+            samplings,
+            max_total_tokens=max_total_tokens,
+        )
+        return self.decode_batch(prefill, eos_token_id)
+
+    def prefill_batch(
+        self,
+        input_ids: list[list[int]],
+        eos_token_id: int,
+        samplings: list[Sampling],
+        *,
+        max_total_tokens: int,
+    ) -> BatchPrefillResult:
         if not input_ids or any(not tokens for tokens in input_ids):
             raise ValueError("A batch must contain at least one non-empty prompt.")
         if len(samplings) != len(input_ids):
@@ -209,9 +292,6 @@ class Decoder:
         cache = KVCache(
             self.model.config, capacity, device=self.device, batch_size=batch_size
         )
-        generated = [[] for _ in input_ids]
-        finished = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
-        eos_finished = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
         token_limits = torch.tensor(
             [item.max_new_tokens for item in samplings], device=self.device
         )
@@ -226,19 +306,43 @@ class Decoder:
                 attention_mask=key_mask,
                 position_ids=position_ids,
             )[:, -1, :]
-            decode_started = 0.0
-            for index in range(max_new_tokens):
-                next_token = self._sample(logits, sampling)
+            self._synchronize()
+            prefill_seconds = time.perf_counter() - prefill_started
+
+        logger.info(
+            "batch_prefill_completed elapsed_ms=%.1f",
+            (time.perf_counter() - started) * 1_000,
+        )
+        return BatchPrefillResult(
+            cache=cache,
+            logits=logits,
+            prompt_lengths=prompt_lengths,
+            key_mask=key_mask,
+            token_limits=token_limits,
+            sampling=sampling,
+            max_new_tokens=max_new_tokens,
+            started=started,
+            prefill_seconds=prefill_seconds,
+        )
+
+    def decode_batch(
+        self, prefill: BatchPrefillResult, eos_token_id: int
+    ) -> BatchDecodeResult:
+        batch_size = prefill.logits.shape[0]
+        generated = [[] for _ in range(batch_size)]
+        finished = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
+        eos_finished = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
+        logits = prefill.logits
+        key_mask = prefill.key_mask
+        decode_started = 0.0
+        index = 0
+        self.model.eval()
+        with torch.inference_mode():
+            for index in range(prefill.max_new_tokens):
+                next_token = self._sample(logits, prefill.sampling)
                 if index == 0:
-                    self._synchronize()
-                    prefill_seconds = time.perf_counter() - prefill_started
                     decode_started = time.perf_counter()
                 token_ids = next_token.squeeze(1).tolist()
-                if index == 0:
-                    logger.info(
-                        "batch_prefill_completed elapsed_ms=%.1f",
-                        (time.perf_counter() - started) * 1_000,
-                    )
                 active = ~finished
                 active_rows = active.tolist()
                 for row, token_id in enumerate(token_ids):
@@ -248,25 +352,25 @@ class Decoder:
                 generated_counts = torch.tensor(
                     [len(tokens) for tokens in generated], device=self.device
                 )
-                finished = eos_finished | generated_counts.ge(token_limits)
+                finished = eos_finished | generated_counts.ge(prefill.token_limits)
                 if index == 0 or (index + 1) % PROGRESS_INTERVAL_TOKENS == 0:
                     logger.info(
                         "batch_generation_progress step=%d max_new_tokens=%d "
                         "output_tokens=%d elapsed_seconds=%.1f",
                         index + 1,
-                        max_new_tokens,
+                        prefill.max_new_tokens,
                         sum(len(tokens) for tokens in generated),
-                        time.perf_counter() - started,
+                        time.perf_counter() - prefill.started,
                     )
                 if finished.all():
                     break
 
                 step_mask = ~finished
                 key_mask = torch.cat((key_mask, step_mask[:, None]), dim=1)
-                step_positions = prompt_lengths + generated_counts - 1
+                step_positions = prefill.prompt_lengths + generated_counts - 1
                 logits = self._forward(
                     next_token,
-                    cache=cache,
+                    cache=prefill.cache,
                     attention_mask=key_mask,
                     position_ids=step_positions[:, None].clamp_min(0),
                 )[:, -1, :]
@@ -280,7 +384,7 @@ class Decoder:
                 "eos" if stopped_on_eos else "length"
                 for stopped_on_eos in eos_finished.tolist()
             ],
-            prefill_seconds=prefill_seconds,
+            prefill_seconds=prefill.prefill_seconds,
             decode_seconds=decode_seconds,
         )
 
