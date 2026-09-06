@@ -29,6 +29,43 @@ class ChatGeneration:
     decode_seconds: float = 0.0
     store_seconds: float = 0.0
 
+    @property
+    def time_to_first_token_seconds(self) -> float:
+        return (
+            self.tokenize_seconds
+            + self.queue_seconds
+            + self.prefix_lookup_seconds
+            + self.restore_seconds
+            + self.prefill_seconds
+        )
+
+    @property
+    def total_seconds(self) -> float:
+        return self.time_to_first_token_seconds + self.decode_seconds + self.store_seconds
+
+    @property
+    def generation_tokens_per_second(self) -> float | None:
+        generation_seconds = self.prefill_seconds + self.decode_seconds
+        if generation_seconds == 0:
+            return None
+        return self.completion_tokens / generation_seconds
+
+    @property
+    def prefill_tokens_per_second(self) -> float | None:
+        if self.prefill_seconds == 0:
+            return None
+        return (self.prompt_tokens - self.cached_tokens) / self.prefill_seconds
+
+    @property
+    def decode_tokens_per_second(self) -> float | None:
+        if self.decode_seconds == 0:
+            return None
+        return max(0, self.completion_tokens - 1) / self.decode_seconds
+
+    @property
+    def cache_hit_rate(self) -> float:
+        return self.cached_tokens / self.prompt_tokens
+
 
 @dataclass(frozen=True)
 class ChatBatchGeneration:

@@ -77,8 +77,12 @@ curl http://127.0.0.1:8000/v1/chat/completions \
 The response uses the OpenAI chat-completion shape and includes one assistant
 choice plus prompt, completion, and total token counts. Reused prefix-cache
 tokens are reported in `usage.prompt_tokens_details.cached_tokens`. The
-Helios-specific `timings` object reports tokenization, queue, cache lookup,
-restore, prefill, decode, and cache-store durations.
+Helios-specific `timings` object reports per-request tokenization, queue, cache
+lookup, restore, prefill, decode, and cache-store durations. It also includes
+`time_to_first_token_seconds` (through the first generated token) and
+`total_seconds` (the sum of the reported timing phases, including cache
+storage), plus `prefill_tokens_per_second`, `decode_tokens_per_second`,
+`generation_tokens_per_second`, and `cache_hit_rate`.
 
 Supported request fields:
 

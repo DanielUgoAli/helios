@@ -123,6 +123,12 @@ async def chat_completions(
             prefill_seconds=result.prefill_seconds,
             decode_seconds=result.decode_seconds,
             store_seconds=result.store_seconds,
+            time_to_first_token_seconds=result.time_to_first_token_seconds,
+            total_seconds=result.total_seconds,
+            generation_tokens_per_second=result.generation_tokens_per_second,
+            prefill_tokens_per_second=result.prefill_tokens_per_second,
+            decode_tokens_per_second=result.decode_tokens_per_second,
+            cache_hit_rate=result.cache_hit_rate,
         ),
     )
 

@@ -61,6 +61,12 @@ class ChatCompletionTimings(BaseModel):
     prefill_seconds: float
     decode_seconds: float
     store_seconds: float
+    time_to_first_token_seconds: float
+    total_seconds: float
+    generation_tokens_per_second: float | None
+    prefill_tokens_per_second: float | None
+    decode_tokens_per_second: float | None
+    cache_hit_rate: float
 
 
 class ChatCompletionResponse(BaseModel):
