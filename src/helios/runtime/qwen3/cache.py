@@ -76,7 +76,7 @@ class KVCache:
 
     @property
     def length(self) -> int:
-        """The common row length, retained for the single/static-batch paths."""
+        """The common row length for a single-row cache."""
         if self._common_length is None:
             raise RuntimeError(
                 "This KV cache has independent row lengths; use slot_length()."

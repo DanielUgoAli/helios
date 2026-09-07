@@ -31,16 +31,13 @@ class Qwen3Model(nn.Module):
         self,
         input_ids: torch.Tensor,
         cache: KVCache | None = None,
-        attention_mask: torch.Tensor | None = None,
         position_ids: torch.Tensor | None = None,
         cache_slots: Sequence[int] | torch.Tensor | None = None,
     ) -> torch.Tensor:
         if cache_slots is None:
-            return self._forward_uniform_cache(
-                input_ids, cache, attention_mask, position_ids
-            )
+            return self._forward_uniform_cache(input_ids, cache, position_ids)
 
-        batch_size, tokens = input_ids.shape
+        tokens = input_ids.shape[1]
         if cache is None:
             raise ValueError("Cache slots require a KV cache.")
         cache_slots = cache.slot_ids(cache_slots)
@@ -58,11 +55,6 @@ class Qwen3Model(nn.Module):
         mask = key_positions[None, None, :] <= query_positions[:, :, None]
         mask &= key_positions[None, None, :] < ends[:, None, None]
         mask = mask[:, None, :, :]
-        if attention_mask is not None:
-            if attention_mask.shape != (batch_size, key_length):
-                raise ValueError("Attention mask must cover every key position.")
-            key_mask = attention_mask[:, None, None, :]
-            mask &= key_mask
         for index, block in enumerate(self.blocks):
             x = block(
                 x,
@@ -84,7 +76,6 @@ class Qwen3Model(nn.Module):
         self,
         input_ids: torch.Tensor,
         cache: KVCache | None,
-        attention_mask: torch.Tensor | None,
         position_ids: torch.Tensor | None,
     ) -> torch.Tensor:
         start_pos = cache.length if cache is not None else 0
@@ -100,9 +91,6 @@ class Qwen3Model(nn.Module):
             query_positions = torch.arange(start_pos, end_pos, device=x.device)
             key_positions = torch.arange(end_pos, device=x.device)
             mask = key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)
-        if attention_mask is not None:
-            key_mask = attention_mask[:, None, None, :]
-            mask = key_mask if mask is None else mask[None, None, :, :] & key_mask
         for index, block in enumerate(self.blocks):
             x = block(
                 x,
