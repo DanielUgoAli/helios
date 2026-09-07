@@ -5,7 +5,7 @@ import os
 import platform
 import socket
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -230,12 +230,19 @@ def run_continuous_batch(
     if concurrency < 1:
         raise ValueError("concurrency must be at least 1.")
     started = time.perf_counter()
+    samples_by_id: dict[str, dict[str, Any]] = {}
+    completed = 0
     with ThreadPoolExecutor(max_workers=min(concurrency, len(specs))) as executor:
-        samples = list(
-            executor.map(
-                lambda spec: run_request(base_url, model, spec, timeout=timeout), specs
-            )
-        )
+        futures = [
+            executor.submit(run_request, base_url, model, spec, timeout=timeout)
+            for spec in specs
+        ]
+        for future in as_completed(futures):
+            sample = future.result()
+            completed += 1
+            print_response(completed, len(specs), sample)
+            samples_by_id[sample["id"]] = sample
+    samples = [samples_by_id[spec.request_id] for spec in specs]
     elapsed_seconds = time.perf_counter() - started
     total_output_tokens = sum(sample["metrics"]["output_tokens"] for sample in samples)
     return samples, {
@@ -352,8 +359,6 @@ def main() -> None:
         timeout=args.timeout,
         concurrency=args.concurrency,
     )
-    for index, sample in enumerate(samples, start=1):
-        print_response(index, len(samples), sample)
 
     now = datetime.now(UTC)
     record = {
