@@ -31,8 +31,6 @@ class KVBlockSnapshot:
 
 
 class KVCache:
-    """Fixed-size KV storage with one independent logical sequence per row."""
-
     def __init__(
         self,
         config: Qwen3Config,
@@ -76,7 +74,6 @@ class KVCache:
 
     @property
     def length(self) -> int:
-        """The common row length for a single-row cache."""
         if self._common_length is None:
             raise RuntimeError(
                 "This KV cache has independent row lengths; use slot_length()."
@@ -360,3 +357,111 @@ class KVCache:
         for slot in rows:
             self._slot(slot)
         return rows
+
+
+class BatchedKVCache:
+    def __init__(self, caches: Sequence[KVCache]) -> None:
+        if not caches:
+            raise ValueError("Batched KV cache needs at least one request cache.")
+        reference = caches[0]
+        reference_layers = tuple(
+            (
+                layer.keys.shape[1],
+                layer.keys.shape[3],
+                layer.keys.dtype,
+                layer.values.dtype,
+                layer.keys.device,
+                layer.values.device,
+            )
+            for layer in reference._layers
+        )
+        for cache in caches:
+            layers = tuple(
+                (
+                    layer.keys.shape[1],
+                    layer.keys.shape[3],
+                    layer.keys.dtype,
+                    layer.values.dtype,
+                    layer.keys.device,
+                    layer.values.device,
+                )
+                for layer in cache._layers
+            )
+            if (
+                cache.batch_size != 1
+                or cache._device != reference._device
+                or layers != reference_layers
+            ):
+                raise ValueError(
+                    "Batched KV caches must be single-request caches with matching "
+                    "device, layer shape, and dtype."
+                )
+        self._caches = tuple(caches)
+        self.batch_size = len(caches)
+        self._device = reference._device
+
+    def slot_ids(self, slots: Sequence[int] | torch.Tensor) -> tuple[int, ...]:
+        if isinstance(slots, torch.Tensor):
+            if slots.ndim != 1:
+                raise ValueError("Batched KV-cache slots must be one-dimensional.")
+            rows = tuple(slots.cpu().tolist())
+        else:
+            rows = tuple(slots)
+        if not rows or len(set(rows)) != len(rows) or any(
+            not isinstance(row, int) or isinstance(row, bool) or not 0 <= row < self.batch_size
+            for row in rows
+        ):
+            raise ValueError("Batched KV-cache slots must be distinct valid row indexes.")
+        return rows
+
+    def slot_length(self, slot: int) -> int:
+        return self._caches[self.slot_ids((slot,))[0]].length
+
+    def slot_lengths(self, slots: Sequence[int] | torch.Tensor) -> torch.Tensor:
+        rows = self.slot_ids(slots)
+        return torch.tensor(
+            [self._caches[row].length for row in rows],
+            dtype=torch.long,
+            device=self._device,
+        )
+
+    def append(
+        self,
+        layer: int,
+        keys: torch.Tensor,
+        values: torch.Tensor,
+        *,
+        slots: Sequence[int] | torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if slots is None:
+            raise ValueError("Batched KV cache requires request row indexes.")
+        rows = self.slot_ids(slots)
+        if keys.shape[0] != len(rows) or values.shape != keys.shape:
+            raise ValueError("Batched KV rows must match the key/value batch size.")
+        appended = [
+            self._caches[row].append(
+                layer, keys[index : index + 1], values[index : index + 1]
+            )
+            for index, row in enumerate(rows)
+        ]
+        key_length = max(key.shape[2] for key, _ in appended)
+        template = appended[0][0]
+        batched_keys = template.new_zeros(
+            len(rows), template.shape[1], key_length, template.shape[3]
+        )
+        batched_values = torch.zeros_like(batched_keys)
+        for index, (key, value) in enumerate(appended):
+            batched_keys[index, :, : key.shape[2]].copy_(key[0])
+            batched_values[index, :, : value.shape[2]].copy_(value[0])
+        return batched_keys, batched_values
+
+    def advance(
+        self,
+        tokens: int,
+        *,
+        slots: Sequence[int] | torch.Tensor | None = None,
+    ) -> None:
+        if slots is None:
+            raise ValueError("Batched KV cache requires request row indexes.")
+        for row in self.slot_ids(slots):
+            self._caches[row].advance(tokens)

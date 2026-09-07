@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import torch
 
 from helios.runtime.prefix_cache import PrefixCacheHit
-from helios.runtime.qwen3.cache import KVCache
+from helios.runtime.qwen3.cache import BatchedKVCache, KVCache
 from helios.runtime.qwen3.model import Qwen3Model
 from helios.runtime.types import Sampling
 
@@ -43,8 +43,6 @@ class DecodedTokens:
 class Decoder:
     def __init__(self, model: Qwen3Model, *, torch_compile: bool = False) -> None:
         self.model = model
-        # Stable-slot forwards use tensor-indexed cache rows and intentionally
-        # stay eager. The original uniform-cache path remains compilable.
         self._slot_forward = model
         self._forward = (
             torch.compile(
@@ -98,7 +96,6 @@ class Decoder:
                 f"Request needs {capacity:,} KV-cache tokens, but the profiled "
                 f"limit is {max_total_tokens:,}."
             )
-        # Cache capacity includes the prompt and the maximum possible continuation.
         cache = KVCache(self.model.config, capacity, device=self.device)
         cached_blocks = prefix_hit.blocks if prefix_hit is not None else ()
         if prefix_hit is not None:
@@ -141,94 +138,26 @@ class Decoder:
             restored_tokens=restored_tokens,
         )
 
-    def slot_cache(self, *, capacity: int, slots: int) -> KVCache:
-        """Allocate the fixed rows used by one continuous-batching cohort."""
-        return KVCache(
-            self.model.config, capacity, device=self.device, batch_size=slots
-        )
-
-    def prefill_slot(
-        self,
-        cache: KVCache,
-        slot: int,
-        input_ids: list[int],
-        *,
-        prefix_hit: PrefixCacheHit | None = None,
-    ) -> PrefillResult:
-        """Prefill one new request directly into a free cache row."""
-        if not input_ids:
-            raise ValueError("A prompt must contain at least one token.")
-        cache.clear_slot(slot)
-        cached_blocks = prefix_hit.blocks if prefix_hit is not None else ()
-        if prefix_hit is not None:
-            if any(
-                len(block.tokens) != block.snapshot.length for block in cached_blocks
-            ):
-                raise ValueError(
-                    "Prefix-cache token and KV block lengths do not match."
-                )
-            cached_tokens = tuple(
-                token for block in cached_blocks for token in block.tokens
-            )
-            if (
-                len(cached_tokens) > len(input_ids)
-                or tuple(input_ids[: len(cached_tokens)]) != cached_tokens
-            ):
-                raise ValueError("Prefix-cache hit does not match the request tokens.")
-            if len(cached_tokens) == len(input_ids):
-                cached_blocks = cached_blocks[:-1]
-
-        restore_started = time.perf_counter()
-        cache.restore_blocks_into_slot(
-            slot, tuple(block.snapshot for block in cached_blocks)
-        )
-        restore_seconds = time.perf_counter() - restore_started
-        restored_tokens = cache.slot_length(slot)
-        token_tensor = torch.tensor(
-            input_ids[restored_tokens:], device=self.device
-        ).unsqueeze(0)
-        if token_tensor.shape[1] < 1:
-            raise RuntimeError("Prefix-cache restore left no token to prefill.")
-
-        self.model.eval()
-        with torch.inference_mode():
-            self._synchronize()
-            started = time.perf_counter()
-            logits = self._slot_forward(token_tensor, cache=cache, cache_slots=[slot])[
-                :, -1, :
-            ]
-            self._synchronize()
-            prefill_seconds = time.perf_counter() - started
-        return PrefillResult(
-            cache=cache,
-            logits=logits,
-            prefill_seconds=prefill_seconds,
-            restore_seconds=restore_seconds,
-            restored_tokens=restored_tokens,
-        )
-
-    def decode_slots(
-        self,
-        cache: KVCache,
-        slots: list[int],
-        token_ids: list[int],
+    def decode_caches(
+        self, caches: list[KVCache], token_ids: list[int]
     ) -> torch.Tensor:
-        """Append one pending token for each occupied slot and return its logits."""
-        if not slots or len(slots) != len(token_ids):
-            raise ValueError("Every occupied slot needs exactly one pending token.")
-        tokens = torch.tensor(
-            token_ids, dtype=torch.long, device=self.device
-        ).unsqueeze(1)
-        positions = cache.slot_lengths(slots).unsqueeze(1)
+        if not caches or len(caches) != len(token_ids):
+            raise ValueError("Every request cache needs exactly one pending token.")
+        tokens = torch.tensor(token_ids, dtype=torch.long, device=self.device).unsqueeze(1)
         self.model.eval()
         with torch.inference_mode():
-            logits = self._slot_forward(
+            if len(caches) == 1:
+                return self._forward(tokens, cache=caches[0])[:, -1, :]
+
+            cache = BatchedKVCache(caches)
+            slots = list(range(len(caches)))
+            positions = cache.slot_lengths(slots).unsqueeze(1)
+            return self._slot_forward(
                 tokens,
                 cache=cache,
                 position_ids=positions,
                 cache_slots=slots,
-            )
-        return logits[:, -1, :]
+            )[:, -1, :]
 
     def decode(
         self,
