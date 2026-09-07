@@ -8,9 +8,6 @@ from fastapi.concurrency import run_in_threadpool
 
 from helios.api.deps import get_generator
 from helios.api.types import (
-    ChatCompletionBatchItem,
-    ChatCompletionBatchRequest,
-    ChatCompletionBatchResponse,
     ChatCompletionChoice,
     ChatCompletionMessage,
     ChatCompletionPromptTokensDetails,
@@ -51,15 +48,12 @@ async def prefix_cache_state(generator: GeneratorDependency) -> dict[str, object
 
 @router.post(
     "/v1/chat/completions",
-    response_model=ChatCompletionResponse | ChatCompletionBatchResponse,
+    response_model=ChatCompletionResponse,
 )
 async def chat_completions(
-    payload: ChatCompletionRequest | ChatCompletionBatchRequest,
+    payload: ChatCompletionRequest,
     generator: GeneratorDependency,
-) -> ChatCompletionResponse | ChatCompletionBatchResponse:
-    if isinstance(payload, ChatCompletionBatchRequest):
-        return await _chat_completions_batch(payload, generator)
-
+) -> ChatCompletionResponse:
     request_id = f"chatcmpl-{uuid.uuid4().hex}"
     logger.info(
         "request_received request_id=%s model=%s messages=%d max_new_tokens=%d",
@@ -130,58 +124,4 @@ async def chat_completions(
             decode_tokens_per_second=result.decode_tokens_per_second,
             cache_hit_rate=result.cache_hit_rate,
         ),
-    )
-
-
-async def _chat_completions_batch(
-    payload: ChatCompletionBatchRequest,
-    generator: GeneratorDependency,
-) -> ChatCompletionBatchResponse:
-    batch_id = f"batch-{uuid.uuid4().hex}"
-    started = time.perf_counter()
-    logger.info(
-        "batch_received batch_id=%s batch_size=%d", batch_id, len(payload.requests)
-    )
-    if any(request.model != generator.model_id for request in payload.requests):
-        logger.warning("batch_rejected batch_id=%s reason=model_not_loaded", batch_id)
-        raise HTTPException(
-            status_code=404,
-            detail=f"Every request must use the loaded model '{generator.model_id}'.",
-        )
-    try:
-        result = await run_in_threadpool(
-            generator.run_chat_batch,
-            [_messages(request) for request in payload.requests],
-            [request.sampling() for request in payload.requests],
-            batch_id,
-        )
-    except (QueueFullError, SchedulerClosedError) as error:
-        logger.warning("batch_rejected batch_id=%s reason=unavailable", batch_id)
-        raise HTTPException(status_code=503, detail=str(error)) from error
-    except ValueError as error:
-        logger.warning("batch_rejected batch_id=%s detail=%s", batch_id, error)
-        raise HTTPException(status_code=422, detail=str(error)) from error
-    except Exception:
-        logger.exception("batch_failed batch_id=%s", batch_id)
-        raise
-    logger.info(
-        "batch_completed batch_id=%s output_tokens=%d total_ms=%.1f",
-        batch_id,
-        sum(result.completion_tokens),
-        (time.perf_counter() - started) * 1_000,
-    )
-    return ChatCompletionBatchResponse(
-        model=generator.model_id,
-        items=[
-            ChatCompletionBatchItem(
-                index=index,
-                content=text,
-                finish_reason="stop" if finish_reason == "eos" else "length",
-                prompt_tokens=result.prompt_tokens[index],
-                completion_tokens=result.completion_tokens[index],
-            )
-            for index, (text, finish_reason) in enumerate(
-                zip(result.texts, result.finish_reasons, strict=True)
-            )
-        ],
     )
