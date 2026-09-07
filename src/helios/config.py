@@ -18,7 +18,6 @@ class HeliosConfig:
     max_batch_size: int = 8
     max_queue_size: int = 32
     batch_wait_ms: float = 2.0
-    batch_shape_ratio: float = 2.0
 
     def __post_init__(self) -> None:
         if (
@@ -47,11 +46,6 @@ class HeliosConfig:
             raise ValueError("max_queue_size must be at least 1.")
         if not math.isfinite(self.batch_wait_ms) or self.batch_wait_ms < 0:
             raise ValueError("batch_wait_ms must be finite and non-negative.")
-        if (
-            not math.isfinite(self.batch_shape_ratio)
-            or self.batch_shape_ratio < 1
-        ):
-            raise ValueError("batch_shape_ratio must be finite and at least 1.")
 
 
 def get_config() -> HeliosConfig:
@@ -73,5 +67,4 @@ def get_config() -> HeliosConfig:
         max_batch_size=int(os.getenv("HELIOS_MAX_BATCH_SIZE", "8")),
         max_queue_size=int(os.getenv("HELIOS_MAX_QUEUE_SIZE", "32")),
         batch_wait_ms=float(os.getenv("HELIOS_BATCH_WAIT_MS", "2")),
-        batch_shape_ratio=float(os.getenv("HELIOS_BATCH_SHAPE_RATIO", "2")),
     )
