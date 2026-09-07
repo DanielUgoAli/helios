@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 import torch
 from torch import nn
 
@@ -8,9 +10,15 @@ from helios.runtime.qwen3.config import Qwen3Config
 class FeedForward(nn.Module):
     def __init__(self, config: Qwen3Config) -> None:
         super().__init__()
-        self.gate = nn.Linear(config.hidden_size, config.hidden_dim, bias=False, dtype=config.dtype)
-        self.up = nn.Linear(config.hidden_size, config.hidden_dim, bias=False, dtype=config.dtype)
-        self.down = nn.Linear(config.hidden_dim, config.hidden_size, bias=False, dtype=config.dtype)
+        self.gate = nn.Linear(
+            config.hidden_size, config.hidden_dim, bias=False, dtype=config.dtype
+        )
+        self.up = nn.Linear(
+            config.hidden_size, config.hidden_dim, bias=False, dtype=config.dtype
+        )
+        self.down = nn.Linear(
+            config.hidden_dim, config.hidden_size, bias=False, dtype=config.dtype
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.down(torch.nn.functional.silu(self.gate(x)) * self.up(x))
@@ -65,15 +73,37 @@ class GroupedQueryAttention(nn.Module):
     def __init__(self, config: Qwen3Config) -> None:
         super().__init__()
         if config.n_heads % config.n_kv_heads:
-            raise ValueError("The number of Q heads must be divisible by the number of KV heads.")
+            raise ValueError(
+                "The number of Q heads must be divisible by the number of KV heads."
+            )
         self.n_heads = config.n_heads
         self.n_kv_heads = config.n_kv_heads
         self.group_size = config.n_heads // config.n_kv_heads
         self.head_dim = config.head_dim
-        self.query = nn.Linear(config.hidden_size, config.n_heads * config.head_dim, bias=False, dtype=config.dtype)
-        self.key = nn.Linear(config.hidden_size, config.n_kv_heads * config.head_dim, bias=False, dtype=config.dtype)
-        self.value = nn.Linear(config.hidden_size, config.n_kv_heads * config.head_dim, bias=False, dtype=config.dtype)
-        self.output = nn.Linear(config.n_heads * config.head_dim, config.hidden_size, bias=False, dtype=config.dtype)
+        self.query = nn.Linear(
+            config.hidden_size,
+            config.n_heads * config.head_dim,
+            bias=False,
+            dtype=config.dtype,
+        )
+        self.key = nn.Linear(
+            config.hidden_size,
+            config.n_kv_heads * config.head_dim,
+            bias=False,
+            dtype=config.dtype,
+        )
+        self.value = nn.Linear(
+            config.hidden_size,
+            config.n_kv_heads * config.head_dim,
+            bias=False,
+            dtype=config.dtype,
+        )
+        self.output = nn.Linear(
+            config.n_heads * config.head_dim,
+            config.hidden_size,
+            bias=False,
+            dtype=config.dtype,
+        )
         self.q_norm = RMSNorm(config.head_dim, config.rms_norm_eps)
         self.k_norm = RMSNorm(config.head_dim, config.rms_norm_eps)
 
@@ -88,11 +118,24 @@ class GroupedQueryAttention(nn.Module):
         cache: KVCache | None = None,
         layer_index: int = 0,
         position_ids: torch.Tensor | None = None,
+        cache_slots: Sequence[int] | torch.Tensor | None = None,
     ) -> torch.Tensor:
         batch_size, tokens, _ = x.shape
-        queries = self.query(x).view(batch_size, tokens, self.n_heads, self.head_dim).transpose(1, 2)
-        keys = self.key(x).view(batch_size, tokens, self.n_kv_heads, self.head_dim).transpose(1, 2)
-        values = self.value(x).view(batch_size, tokens, self.n_kv_heads, self.head_dim).transpose(1, 2)
+        queries = (
+            self.query(x)
+            .view(batch_size, tokens, self.n_heads, self.head_dim)
+            .transpose(1, 2)
+        )
+        keys = (
+            self.key(x)
+            .view(batch_size, tokens, self.n_kv_heads, self.head_dim)
+            .transpose(1, 2)
+        )
+        values = (
+            self.value(x)
+            .view(batch_size, tokens, self.n_kv_heads, self.head_dim)
+            .transpose(1, 2)
+        )
         queries = apply_rope(
             self.q_norm(queries),
             cos,
@@ -108,7 +151,7 @@ class GroupedQueryAttention(nn.Module):
             position_ids=position_ids,
         )
         if cache is not None:
-            keys, values = cache.append(layer_index, keys, values)
+            keys, values = cache.append(layer_index, keys, values, slots=cache_slots)
         context = torch.nn.functional.scaled_dot_product_attention(
             queries,
             keys,
@@ -140,10 +183,17 @@ class TransformerBlock(nn.Module):
         cache: KVCache | None = None,
         layer_index: int = 0,
         position_ids: torch.Tensor | None = None,
+        cache_slots: Sequence[int] | torch.Tensor | None = None,
     ) -> torch.Tensor:
         x = x + self.attention(
-            self.input_norm(x), mask, cos, sin,
-            start_pos=start_pos, cache=cache, layer_index=layer_index,
+            self.input_norm(x),
+            mask,
+            cos,
+            sin,
+            start_pos=start_pos,
+            cache=cache,
+            layer_index=layer_index,
             position_ids=position_ids,
+            cache_slots=cache_slots,
         )
         return x + self.feed_forward(self.post_attention_norm(x))
