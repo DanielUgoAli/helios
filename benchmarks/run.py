@@ -219,7 +219,7 @@ def run_request(
     }
 
 
-def run_concurrent(
+def run_continuous_batch(
     base_url: str,
     model: str,
     specs: list[BenchmarkRequest],
@@ -267,7 +267,7 @@ def report(
     samples: list[dict[str, Any]],
     path: Path,
     warmup: dict[str, Any],
-    dynamic_batch_metrics: dict[str, Any],
+    continuous_batch_metrics: dict[str, Any],
 ) -> str:
     lines = [
         "",
@@ -302,14 +302,14 @@ def report(
     lines.extend(
         [
             "",
-            "Dynamic batch metrics",
-            f"Request count: {dynamic_batch_metrics['request_count']}",
-            f"Client concurrency: {dynamic_batch_metrics['concurrency']}",
-            f"Output tokens: {dynamic_batch_metrics['output_tokens']}",
-            f"Elapsed: {duration(dynamic_batch_metrics['elapsed_seconds'])}",
+            "Continuous-batch metrics",
+            f"Request count: {continuous_batch_metrics['request_count']}",
+            f"Concurrent requests: {continuous_batch_metrics['concurrency']}",
+            f"Output tokens: {continuous_batch_metrics['output_tokens']}",
+            f"Elapsed: {duration(continuous_batch_metrics['elapsed_seconds'])}",
             (
                 "Output throughput: "
-                f"{dynamic_batch_metrics['output_tokens_per_second']:.2f} tok/s"
+                f"{continuous_batch_metrics['output_tokens_per_second']:.2f} tok/s"
             ),
         ]
     )
@@ -345,7 +345,7 @@ def main() -> None:
         f"{min(args.concurrency, len(requests))} ...",
         flush=True,
     )
-    samples, dynamic_batch_metrics = run_concurrent(
+    samples, continuous_batch_metrics = run_continuous_batch(
         args.base_url,
         model,
         requests,
@@ -369,8 +369,8 @@ def main() -> None:
             "schema_version": dataset_version,
             "request_count": len(requests),
         },
-        "execution_mode": "dynamic-batch",
-        "dynamic_batch_metrics": dynamic_batch_metrics,
+        "execution_mode": "continuous-batch",
+        "continuous_batch_metrics": continuous_batch_metrics,
         "torch_compile": health["torch_compile"],
         "warmup": warmup,
         "samples": samples,
@@ -382,7 +382,7 @@ def main() -> None:
     )
     path = RESULTS / f"{now.strftime('%Y%m%dT%H%M%SZ')}-{safe_label}.json"
     path.write_text(json.dumps(record, indent=2) + "\n")
-    print(report(samples, path, warmup, dynamic_batch_metrics))
+    print(report(samples, path, warmup, continuous_batch_metrics))
 
 
 if __name__ == "__main__":

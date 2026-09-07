@@ -1,4 +1,4 @@
-# Dataset dynamic-batching benchmark
+# Dataset continuous-batching benchmark
 
 Start Helios in one terminal. Model loading and the one-time compile warmup
 belong to the server process:
@@ -10,15 +10,15 @@ HELIOS_TORCH_COMPILE=1 uv run helios
 Then run the HTTP-only benchmark client in another terminal:
 
 ```bash
-uv run python benchmarks/run.py --label dynamic-batch
-uv run python benchmarks/run.py --label dynamic-batch --concurrency 16
+uv run python benchmarks/run.py --label continuous-batch
+uv run python benchmarks/run.py --label continuous-batch --concurrency 16
 uv run python benchmarks/run.py --label custom --dataset /path/to/dataset.json
 ```
 
 The runner never loads, starts, stops, or owns the model. It calls the running
 server's `/health` and `/v1/chat/completions` endpoints. It sends individual
-chat-completion requests concurrently, so Helios's dynamic scheduler—not the
-explicit static-batch endpoint—chooses compatible batches. Use `--base-url` or
+chat-completion requests concurrently, so Helios's continuous scheduler can
+share decode steps across in-flight requests. Use `--base-url` or
 `HELIOS_BASE_URL` when the server is not listening on `http://127.0.0.1:8000`.
 
 `dataset.json` is a versioned request file. Each entry supplies the same fields
@@ -44,7 +44,7 @@ model ID and `stream: false`:
 After `/health`, the runner sends one isolated warmup request. It records its
 client end-to-end latency, server total time, and TTFT separately; it is not a
 dataset sample. Dataset samples retain their individual server timings, while
-the record additionally contains dynamic-batch aggregate elapsed time and
+the record additionally contains continuous-batch aggregate elapsed time and
 output throughput. The runner validates the dataset before contacting Helios.
 
 Results are written to `benchmarks/results/`.
