@@ -71,8 +71,7 @@ class Generator:
         if self.prefix_cache.reserve(0):
             torch.cuda.empty_cache()
 
-    def reserve_continuous_cache(self, memory_bytes: int) -> None:
-        """Make room for the fixed KV pool used by an active continuous cohort."""
+    def reserve_active_cache(self, memory_bytes: int) -> None:
         if self.prefix_cache.reserve(memory_bytes):
             torch.cuda.empty_cache()
 

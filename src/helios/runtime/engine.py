@@ -28,7 +28,8 @@ class _Request:
 class _ActiveRequest:
     job: Job[_Request, GenerationResult]
     request: _Request
-    slot: int
+    cache: KVCache
+    reservation_bytes: int
     output_ids: list[int]
     pending_token_id: int
     started_at: float
@@ -58,10 +59,6 @@ class Engine:
         self._generation_lock = Lock()
         self._max_batch_size = config.max_batch_size
         self._active_requests: list[_ActiveRequest] = []
-        self._cohort_cache: KVCache | None = None
-        self._cohort_capacity = 0
-        self._cohort_slots = 0
-        self._draining_cohort = False
         self._scheduler: Scheduler[_Request, GenerationResult] = Scheduler(
             self._continuous_tick,
             max_batch_size=config.max_batch_size,
@@ -105,8 +102,7 @@ class Engine:
         self._scheduler.close()
         with self._generation_lock:
             self._active_requests = []
-            if self._cohort_cache is not None:
-                self._release_cohort()
+            self.generator.reserve_active_cache(0)
 
     def run(
         self,
@@ -161,19 +157,14 @@ class Engine:
     def _continuous_tick(
         self, scheduler: Scheduler[_Request, GenerationResult]
     ) -> bool:
-        """Advance active requests once, then fill any slots that became free."""
         with self._generation_lock:
             self._drop_cancelled_active()
+            scheduler.peek()
             if self._active_requests:
                 try:
                     self._decode_active_requests()
-                except Exception as error:  # noqa: BLE001
+                except Exception as error:
                     self._fail_active_requests(error)
-
-            scheduler.set_active(tuple(active.job for active in self._active_requests))
-
-            if not self._active_requests and self._cohort_cache is not None:
-                self._release_cohort()
 
             self._admit_requests(scheduler)
             scheduler.set_active(tuple(active.job for active in self._active_requests))
@@ -182,33 +173,43 @@ class Engine:
     def _admit_requests(
         self, scheduler: Scheduler[_Request, GenerationResult]
     ) -> None:
-        while not self._draining_cohort:
+        if len(self._active_requests) >= self._max_batch_size:
+            head = scheduler.peek()
+            if head is not None:
+                logger.info(
+                    "continuous_admission_blocked request_id=%s reason=slots "
+                    "active_request_ids=%s %s",
+                    head.payload.request_id,
+                    [active.request.request_id for active in self._active_requests],
+                    self._memory_log_fields(self._reserved_memory_bytes()),
+                )
+            return
+        while len(self._active_requests) < self._max_batch_size:
             head = scheduler.peek()
             if head is None:
                 return
             request = head.payload
             needed = len(request.input_ids) + request.sampling.max_new_tokens
-            if self._cohort_cache is None:
-                try:
-                    self._start_cohort(needed)
-                except Exception as error:  # noqa: BLE001
-                    job = scheduler.take(head)
-                    if job is not None and not job.future.done():
-                        job.future.set_exception(error)
-                    continue
-            if needed > self._cohort_capacity:
-                self._draining_cohort = True
-                return
-            used_slots = {active.slot for active in self._active_requests}
-            slot = next(
-                (
-                    candidate
-                    for candidate in range(self._cohort_slots)
-                    if candidate not in used_slots
-                ),
-                None,
+            reservation_bytes = needed * self.generator.cache.bytes_per_token
+            if reservation_bytes > self.generator.cache.kv_budget_bytes:
+                job = scheduler.take(head)
+                if job is not None and not job.future.done():
+                    job.future.set_exception(
+                        RuntimeError("The FIFO request cannot fit in the KV-cache budget.")
+                    )
+                continue
+            reserved = self._reserved_memory_bytes(
+                extra_capacity=needed,
             )
-            if slot is None:
+            if reserved > self.generator.cache.kv_budget_bytes:
+                logger.info(
+                    "continuous_admission_blocked request_id=%s reason=memory "
+                    "budget_bytes=%d active_request_ids=%s %s",
+                    request.request_id,
+                    self.generator.cache.kv_budget_bytes,
+                    [active.request.request_id for active in self._active_requests],
+                    self._memory_log_fields(reserved),
+                )
                 return
 
             job = scheduler.take(head)
@@ -224,22 +225,26 @@ class Engine:
                 queue_seconds * 1_000,
             )
             request_started = time.perf_counter()
+            prefill = None
+            active = None
             try:
+                self.generator.reserve_active_cache(reserved)
                 lookup_started = time.perf_counter()
                 prefix_hit = self.generator.prefix_cache.longest_prefix(
                     request.input_ids
                 )
                 prefix_lookup_seconds = time.perf_counter() - lookup_started
-                prefill = self.generator.decoder.prefill_slot(
-                    self._cohort_cache,
-                    slot,
+                prefill = self.generator.decoder.prefill(
                     request.input_ids,
+                    request.sampling,
+                    max_total_tokens=self.generator.cache.max_tokens,
                     prefix_hit=prefix_hit,
                 )
                 active = _ActiveRequest(
                     job=job,
                     request=request,
-                    slot=slot,
+                    cache=prefill.cache,
+                    reservation_bytes=reservation_bytes,
                     output_ids=[],
                     pending_token_id=0,
                     started_at=request_started,
@@ -262,47 +267,48 @@ class Engine:
                 )
                 if token_id == request.eos_token_id:
                     self._complete_request(active, "eos", queue_seconds)
+                    active = None
+                    prefill = None
+                    self.generator.reserve_active_cache(self._reserved_memory_bytes())
                 else:
                     active.output_ids.append(token_id)
                     if len(active.output_ids) == request.sampling.max_new_tokens:
                         self._complete_request(active, "length", queue_seconds)
+                        active = None
+                        prefill = None
+                        self.generator.reserve_active_cache(
+                            self._reserved_memory_bytes()
+                        )
                     else:
                         active.pending_token_id = token_id
                         self._active_requests.append(active)
-            except Exception as error:  # noqa: BLE001
+                        logger.info(
+                            "continuous_admitted request_id=%s active_request_ids=%s "
+                            "%s",
+                            request.request_id,
+                            [item.request.request_id for item in self._active_requests],
+                            self._memory_log_fields(self._reserved_memory_bytes()),
+                        )
+            except Exception as error:
                 if not job.future.done():
                     job.future.set_exception(error)
-                self._cohort_cache.clear_slot(slot)
+                active = None
+                prefill = None
+                self.generator.reserve_active_cache(self._reserved_memory_bytes())
                 continue
 
-    def _start_cohort(self, capacity: int) -> None:
-        max_tokens = self.generator.cache.max_tokens
-        slots = min(self._max_batch_size, max_tokens // capacity)
-        if slots < 1:
-            raise RuntimeError("The FIFO request cannot fit in the KV-cache budget.")
-        pool_bytes = slots * capacity * self.generator.cache.bytes_per_token
-        self.generator.reserve_continuous_cache(pool_bytes)
-        self._cohort_cache = self.generator.decoder.slot_cache(
-            capacity=capacity, slots=slots
-        )
-        self._cohort_capacity = capacity
-        self._cohort_slots = slots
-        self._draining_cohort = False
-        logger.info(
-            "continuous_cohort_started slots=%d slot_capacity=%d kv_cache_tokens=%d",
-            slots,
-            capacity,
-            slots * capacity,
-        )
-
     def _decode_active_requests(self) -> None:
-        if self._cohort_cache is None:
-            raise RuntimeError("Active requests require a continuous KV-cache cohort.")
-        slots = [active.slot for active in self._active_requests]
         tokens = [active.pending_token_id for active in self._active_requests]
         self.generator.decoder._synchronize()
         started = time.perf_counter()
-        logits = self.generator.decoder.decode_slots(self._cohort_cache, slots, tokens)
+        logger.info(
+            "continuous_decode active_request_ids=%s %s",
+            [active.request.request_id for active in self._active_requests],
+            self._memory_log_fields(self._reserved_memory_bytes()),
+        )
+        logits = self.generator.decoder.decode_caches(
+            [active.cache for active in self._active_requests], tokens
+        )
         self.generator.decoder._synchronize()
         elapsed = time.perf_counter() - started
 
@@ -328,35 +334,32 @@ class Engine:
             active.pending_token_id = token_id
             surviving.append(active)
         self._active_requests = surviving
+        self.generator.reserve_active_cache(self._reserved_memory_bytes())
 
     def _drop_cancelled_active(self) -> None:
-        if self._cohort_cache is None:
-            return
         surviving: list[_ActiveRequest] = []
         for active in self._active_requests:
             if active.job.future.cancelled():
-                self._cohort_cache.clear_slot(active.slot)
+                logger.info("continuous_cancelled request_id=%s", active.request.request_id)
             else:
                 surviving.append(active)
         self._active_requests = surviving
+        self.generator.reserve_active_cache(self._reserved_memory_bytes())
 
     def _complete_request(
         self, active: _ActiveRequest, finish_reason: str, queue_seconds: float
     ) -> None:
-        if self._cohort_cache is None:
-            raise RuntimeError("A completed request must still own its cache slot.")
         store_started = time.perf_counter()
         try:
-            pool_bytes = (
-                self._cohort_slots
-                * self._cohort_capacity
-                * self.generator.cache.bytes_per_token
-            )
-            stored_blocks = self.generator.prefix_cache.store_completed_blocks(
-                active.request.input_ids,
-                self._cohort_cache,
-                reserved_memory_bytes=pool_bytes,
-                slot=active.slot,
+            reserved = self._completion_reserved_memory_bytes(active)
+            stored_blocks = (
+                self.generator.prefix_cache.store_completed_blocks(
+                    active.request.input_ids,
+                    active.cache,
+                    reserved_memory_bytes=reserved,
+                )
+                if reserved <= self.generator.cache.kv_budget_bytes
+                else 0
             )
         except Exception:
             logger.exception(
@@ -365,7 +368,6 @@ class Engine:
             )
             stored_blocks = 0
         store_seconds = time.perf_counter() - store_started
-        self._cohort_cache.clear_slot(active.slot)
         result = GenerationResult(
             output_ids=active.output_ids,
             finish_reason=finish_reason,
@@ -386,20 +388,68 @@ class Engine:
         if not active.job.future.done():
             active.job.future.set_result(result)
         self._finish_scheduled_request(result, queue_seconds, active.request.request_id)
+        post_completion_reserved = self._reserved_memory_bytes(excluding=active)
+        logger.info(
+            "continuous_completed request_id=%s %s",
+            active.request.request_id,
+            self._memory_log_fields(post_completion_reserved),
+        )
 
     def _fail_active_requests(self, error: Exception) -> None:
         for active in self._active_requests:
             if not active.job.future.done():
                 active.job.future.set_exception(error)
         self._active_requests = []
-        self._release_cohort()
+        self.generator.reserve_active_cache(0)
 
-    def _release_cohort(self) -> None:
-        self._cohort_cache = None
-        self._cohort_capacity = 0
-        self._cohort_slots = 0
-        self._draining_cohort = False
-        self.generator.reserve_continuous_cache(0)
+    def _reserved_memory_bytes(
+        self,
+        *,
+        extra_capacity: int = 0,
+        excluding: _ActiveRequest | None = None,
+    ) -> int:
+        active = [
+            item for item in self._active_requests if item is not excluding
+        ]
+        kv_bytes = sum(item.reservation_bytes for item in active)
+        if extra_capacity:
+            kv_bytes += extra_capacity * self.generator.cache.bytes_per_token
+        count = len(active) + bool(extra_capacity)
+        if count < 2:
+            return kv_bytes
+        lengths = [item.cache.capacity for item in active]
+        if extra_capacity:
+            lengths.append(extra_capacity)
+        per_layer_bytes = (
+            self.generator.cache.bytes_per_token
+            // self.generator.decoder.model.config.n_layers
+        )
+        max_capacity = max(lengths)
+        temporary_bytes = count * max_capacity * per_layer_bytes
+        attention_workspace_bytes = (
+            count
+            * self.generator.decoder.model.config.n_heads
+            * max_capacity
+            * (1 + 4)
+        )
+        return kv_bytes + temporary_bytes + attention_workspace_bytes
+
+    def _completion_reserved_memory_bytes(self, active: _ActiveRequest) -> int:
+        reserved = self._reserved_memory_bytes()
+        if all(item is not active for item in self._active_requests):
+            reserved = self._reserved_memory_bytes(extra_capacity=active.cache.capacity)
+        return reserved
+
+    def _memory_log_fields(self, kv_reserved_bytes: int) -> str:
+        cache = self.generator.cache
+        prefix_cache_bytes = self.generator.prefix_cache.memory_bytes
+        return (
+            f"kv_reserved_bytes={kv_reserved_bytes} "
+            f"prefix_cache_bytes={prefix_cache_bytes} "
+            f"activation_headroom_bytes={cache.activation_headroom_bytes} "
+            f"total_gpu_reserved_bytes="
+            f"{cache.device_occupied_bytes + cache.activation_headroom_bytes + kv_reserved_bytes + prefix_cache_bytes}"
+        )
 
     def _finish_scheduled_request(
         self, result: GenerationResult, queue_seconds: float, request_id: str

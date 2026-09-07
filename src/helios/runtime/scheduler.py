@@ -27,8 +27,6 @@ class Job(Generic[Payload, Result]):
 
 
 class Scheduler(Generic[Payload, Result]):
-    """One worker that lets the engine schedule one generation iteration at a time."""
-
     def __init__(
         self,
         tick: Callable[["Scheduler[Payload, Result]"], bool],
@@ -127,7 +125,7 @@ class Scheduler(Generic[Payload, Result]):
                     self._wait_for_initial_requests()
             try:
                 has_active = self._tick(self)
-            except Exception as error:  # noqa: BLE001
+            except Exception as error:
                 with self._condition:
                     active = self._active
                     self._active = ()
