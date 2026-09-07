@@ -279,6 +279,4 @@ measure the effect before adding the next optimization.
 
 ## License
 
-This repository does not currently include a license. The source is publicly
-visible, but no permission to use, modify, or redistribute it is granted until
-a license is added.
+Helios is released under the [MIT License](LICENSE).
