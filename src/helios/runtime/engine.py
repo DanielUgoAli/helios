@@ -7,8 +7,10 @@ from typing import cast
 
 from helios.config import HeliosConfig
 from helios.runtime.check import MemoryChecker
-from helios.runtime.generate import GenerationResult, Generator
+from helios.runtime.generate import GenerationResult, Generator, PrefixTrace
 from helios.runtime.load import Loader
+from helios.runtime.prefix_cache import PromptBlockView, describe_prompt_blocks
+from helios.runtime.qwen3.cache import KVCache
 from helios.runtime.qwen3.decode import BatchDecodeResult
 from helios.runtime.scheduler import Job, Scheduler
 from helios.runtime.types import Sampling
@@ -36,6 +38,23 @@ _Payload = _Request | _Batch
 _Result = GenerationResult | BatchDecodeResult
 
 
+@dataclass
+class _ActiveRequest:
+    job: Job[_Payload, _Result]
+    request: _Request
+    slot: int
+    output_ids: list[int]
+    pending_token_id: int
+    started_at: float
+    prefill_seconds: float
+    inter_token_seconds: list[float]
+    prefix_lookup_seconds: float
+    restore_seconds: float
+    hit_tokens: int
+    restored_tokens: int
+    prompt_blocks: tuple[PromptBlockView, ...]
+
+
 class Engine:
     def __init__(self, config: HeliosConfig, loader: Loader | None = None) -> None:
         loaded = (loader or Loader()).load(config)
@@ -51,14 +70,18 @@ class Engine:
             prefix_cache_ttl_seconds=config.prefix_cache_ttl_seconds,
         )
         self._generation_lock = Lock()
+        self._max_batch_size = config.max_batch_size
+        self._active_requests: list[_ActiveRequest] = []
+        self._cohort_cache: KVCache | None = None
+        self._cohort_capacity = 0
+        self._cohort_slots = 0
+        self._draining_cohort = False
         self._scheduler: Scheduler[_Payload, _Result] = Scheduler(
-            self._execute,
-            self._can_add,
+            self._continuous_tick,
             max_batch_size=config.max_batch_size,
             max_queue_size=config.max_queue_size,
             batch_wait_seconds=config.batch_wait_ms / 1_000,
         )
-        self._batch_shape_ratio = config.batch_shape_ratio
 
     def update_cache_capacity(
         self,
@@ -94,6 +117,10 @@ class Engine:
 
     def close(self) -> None:
         self._scheduler.close()
+        with self._generation_lock:
+            self._active_requests = []
+            if self._cohort_cache is not None:
+                self._release_cohort()
 
     def run(
         self,
@@ -102,7 +129,35 @@ class Engine:
         sampling: Sampling,
         request_id: str | None = None,
     ) -> GenerationResult:
-        return self.enqueue(input_ids, eos_token_id, sampling, request_id).result()
+        return self.enqueue(
+            input_ids,
+            eos_token_id,
+            sampling,
+            request_id=request_id,
+        ).result()
+
+    def run_warmup(
+        self,
+        input_ids: list[int],
+        eos_token_id: int,
+        sampling: Sampling,
+        request_id: str,
+    ) -> GenerationResult:
+        self._validate_request(input_ids, eos_token_id, sampling)
+        with self._generation_lock:
+            logger.info(
+                "request_running request_id=%s prompt_tokens=%d max_new_tokens=%d queue_ms=0.0",
+                request_id,
+                len(input_ids),
+                sampling.max_new_tokens,
+            )
+            result = self.generator.run(
+                input_ids,
+                eos_token_id,
+                sampling,
+                request_id=request_id,
+            )
+            return self._finish_scheduled_request(result, 0.0, request_id)
 
     def enqueue(
         self,
@@ -120,9 +175,80 @@ class Engine:
             self._scheduler.enqueue(Job(payload=payload, request_ids=(request_id,))),
         )
 
-    def _run_one(self, request: _Request, queue_seconds: float) -> GenerationResult:
+    def _continuous_tick(self, scheduler: Scheduler[_Payload, _Result]) -> bool:
+        """Advance active requests once, then fill any slots that became free."""
         with self._generation_lock:
-            started = time.perf_counter()
+            self._drop_cancelled_active()
+            if self._active_requests:
+                try:
+                    self._decode_active_requests()
+                except Exception as error:  # noqa: BLE001
+                    self._fail_active_requests(error)
+
+            scheduler.set_active(tuple(active.job for active in self._active_requests))
+
+            if not self._active_requests and self._cohort_cache is not None:
+                self._release_cohort()
+
+            head = scheduler.peek()
+            if not self._active_requests and isinstance(
+                head.payload if head is not None else None, _Batch
+            ):
+                job = scheduler.take(head)
+                if job is not None:
+                    batch = cast(_Batch, job.payload)
+                    try:
+                        result = self._run_explicit_batch(
+                            batch, time.perf_counter() - job.enqueued_at
+                        )
+                    except Exception as error:  # noqa: BLE001
+                        if not job.future.done():
+                            job.future.set_exception(error)
+                    else:
+                        if not job.future.done():
+                            job.future.set_result(result)
+                    scheduler.set_active(())
+                return scheduler.peek() is not None
+
+            self._admit_requests(scheduler)
+            scheduler.set_active(tuple(active.job for active in self._active_requests))
+            return bool(self._active_requests or scheduler.peek() is not None)
+
+    def _admit_requests(self, scheduler: Scheduler[_Payload, _Result]) -> None:
+        while not self._draining_cohort:
+            head = scheduler.peek()
+            if head is None or not isinstance(head.payload, _Request):
+                return
+            request = head.payload
+            needed = len(request.input_ids) + request.sampling.max_new_tokens
+            if self._cohort_cache is None:
+                try:
+                    self._start_cohort(needed)
+                except Exception as error:  # noqa: BLE001
+                    job = scheduler.take(head)
+                    if job is not None and not job.future.done():
+                        job.future.set_exception(error)
+                    continue
+            if needed > self._cohort_capacity:
+                self._draining_cohort = True
+                return
+            used_slots = {active.slot for active in self._active_requests}
+            slot = next(
+                (
+                    candidate
+                    for candidate in range(self._cohort_slots)
+                    if candidate not in used_slots
+                ),
+                None,
+            )
+            if slot is None:
+                return
+
+            job = scheduler.take(head)
+            if job is None:
+                return
+            request = cast(_Request, job.payload)
+            queue_seconds = time.perf_counter() - job.enqueued_at
             logger.info(
                 "request_running request_id=%s prompt_tokens=%d max_new_tokens=%d queue_ms=%.1f",
                 request.request_id,
@@ -130,41 +256,183 @@ class Engine:
                 request.sampling.max_new_tokens,
                 queue_seconds * 1_000,
             )
-            result = self.generator.run(
-                request.input_ids,
-                request.eos_token_id,
-                request.sampling,
-                request_id=request.request_id,
-            )
-
-            result = replace(result, queue_seconds=queue_seconds)
-            generation_seconds = result.prefill_seconds + sum(
-                result.inter_token_seconds
-            )
-            tokens_per_second = (
-                len(result.output_ids) / generation_seconds
-                if generation_seconds > 0
-                else 0.0
-            )
-            logger.info(
-                "request_completed request_id=%s finish_reason=%s output_tokens=%d "
-                "cache_hit=%s cached_tokens=%d model_ttft_ms=%.1f generation_tok_s=%.2f "
-                "total_ms=%.1f",
-                request.request_id,
-                result.finish_reason,
-                len(result.output_ids),
-                result.prefix.restored_tokens > 0,
-                result.prefix.restored_tokens,
-                (
-                    result.prefix_lookup_seconds
-                    + result.restore_seconds
-                    + result.prefill_seconds
+            request_started = time.perf_counter()
+            try:
+                lookup_started = time.perf_counter()
+                prefix_hit = self.generator.prefix_cache.longest_prefix(
+                    request.input_ids
                 )
-                * 1_000,
-                tokens_per_second,
-                (queue_seconds + time.perf_counter() - started) * 1_000,
+                prefix_lookup_seconds = time.perf_counter() - lookup_started
+                prefill = self.generator.decoder.prefill_slot(
+                    self._cohort_cache,
+                    slot,
+                    request.input_ids,
+                    prefix_hit=prefix_hit,
+                )
+                active = _ActiveRequest(
+                    job=job,
+                    request=request,
+                    slot=slot,
+                    output_ids=[],
+                    pending_token_id=0,
+                    started_at=request_started,
+                    prefill_seconds=prefill.prefill_seconds,
+                    inter_token_seconds=[],
+                    prefix_lookup_seconds=prefix_lookup_seconds,
+                    restore_seconds=prefill.restore_seconds,
+                    hit_tokens=0 if prefix_hit is None else prefix_hit.length,
+                    restored_tokens=prefill.restored_tokens,
+                    prompt_blocks=describe_prompt_blocks(
+                        request.input_ids,
+                        self.generator.prefix_cache.block_size,
+                        prefix_hit,
+                    ),
+                )
+                token_id = int(
+                    self.generator.decoder._sample(
+                        prefill.logits, request.sampling
+                    ).item()
+                )
+                if token_id == request.eos_token_id:
+                    self._complete_request(active, "eos", queue_seconds)
+                else:
+                    active.output_ids.append(token_id)
+                    if len(active.output_ids) == request.sampling.max_new_tokens:
+                        self._complete_request(active, "length", queue_seconds)
+                    else:
+                        active.pending_token_id = token_id
+                        self._active_requests.append(active)
+            except Exception as error:  # noqa: BLE001
+                if not job.future.done():
+                    job.future.set_exception(error)
+                self._cohort_cache.clear_slot(slot)
+                continue
+
+    def _start_cohort(self, capacity: int) -> None:
+        max_tokens = self.generator.cache.max_tokens
+        slots = min(self._max_batch_size, max_tokens // capacity)
+        if slots < 1:
+            raise RuntimeError("The FIFO request cannot fit in the KV-cache budget.")
+        pool_bytes = slots * capacity * self.generator.cache.bytes_per_token
+        self.generator.reserve_continuous_cache(pool_bytes)
+        self._cohort_cache = self.generator.decoder.slot_cache(
+            capacity=capacity, slots=slots
+        )
+        self._cohort_capacity = capacity
+        self._cohort_slots = slots
+        self._draining_cohort = False
+        logger.info(
+            "continuous_cohort_started slots=%d slot_capacity=%d kv_cache_tokens=%d",
+            slots,
+            capacity,
+            slots * capacity,
+        )
+
+    def _decode_active_requests(self) -> None:
+        if self._cohort_cache is None:
+            raise RuntimeError("Active requests require a continuous KV-cache cohort.")
+        slots = [active.slot for active in self._active_requests]
+        tokens = [active.pending_token_id for active in self._active_requests]
+        self.generator.decoder._synchronize()
+        started = time.perf_counter()
+        logits = self.generator.decoder.decode_slots(self._cohort_cache, slots, tokens)
+        self.generator.decoder._synchronize()
+        elapsed = time.perf_counter() - started
+
+        surviving: list[_ActiveRequest] = []
+        for row, active in enumerate(self._active_requests):
+            token_id = int(
+                self.generator.decoder._sample(
+                    logits[row : row + 1], active.request.sampling
+                ).item()
             )
-            return result
+            active.inter_token_seconds.append(elapsed)
+            if token_id == active.request.eos_token_id:
+                self._complete_request(
+                    active, "eos", active.started_at - active.job.enqueued_at
+                )
+                continue
+            active.output_ids.append(token_id)
+            if len(active.output_ids) == active.request.sampling.max_new_tokens:
+                self._complete_request(
+                    active, "length", active.started_at - active.job.enqueued_at
+                )
+                continue
+            active.pending_token_id = token_id
+            surviving.append(active)
+        self._active_requests = surviving
+
+    def _drop_cancelled_active(self) -> None:
+        if self._cohort_cache is None:
+            return
+        surviving: list[_ActiveRequest] = []
+        for active in self._active_requests:
+            if active.job.future.cancelled():
+                self._cohort_cache.clear_slot(active.slot)
+            else:
+                surviving.append(active)
+        self._active_requests = surviving
+
+    def _complete_request(
+        self, active: _ActiveRequest, finish_reason: str, queue_seconds: float
+    ) -> None:
+        if self._cohort_cache is None:
+            raise RuntimeError("A completed request must still own its cache slot.")
+        store_started = time.perf_counter()
+        try:
+            pool_bytes = (
+                self._cohort_slots
+                * self._cohort_capacity
+                * self.generator.cache.bytes_per_token
+            )
+            stored_blocks = self.generator.prefix_cache.store_completed_blocks(
+                active.request.input_ids,
+                self._cohort_cache,
+                reserved_memory_bytes=pool_bytes,
+                slot=active.slot,
+            )
+        except Exception:
+            logger.exception(
+                "prefix_cache_store_failed request_id=%s",
+                active.request.request_id,
+            )
+            stored_blocks = 0
+        store_seconds = time.perf_counter() - store_started
+        self._cohort_cache.clear_slot(active.slot)
+        result = GenerationResult(
+            output_ids=active.output_ids,
+            finish_reason=finish_reason,
+            prefill_seconds=active.prefill_seconds,
+            inter_token_seconds=active.inter_token_seconds,
+            restore_seconds=active.restore_seconds,
+            prefix_lookup_seconds=active.prefix_lookup_seconds,
+            store_seconds=store_seconds,
+            queue_seconds=queue_seconds,
+            prefix=PrefixTrace(
+                block_size=self.generator.prefix_cache.block_size,
+                prompt_blocks=active.prompt_blocks,
+                hit_tokens=active.hit_tokens,
+                restored_tokens=active.restored_tokens,
+                stored_blocks=stored_blocks,
+            ),
+        )
+        if not active.job.future.done():
+            active.job.future.set_result(result)
+        self._finish_scheduled_request(result, queue_seconds, active.request.request_id)
+
+    def _fail_active_requests(self, error: Exception) -> None:
+        for active in self._active_requests:
+            if not active.job.future.done():
+                active.job.future.set_exception(error)
+        self._active_requests = []
+        self._release_cohort()
+
+    def _release_cohort(self) -> None:
+        self._cohort_cache = None
+        self._cohort_capacity = 0
+        self._cohort_slots = 0
+        self._draining_cohort = False
+        self.generator.reserve_continuous_cache(0)
 
     def run_batch(
         self,
@@ -193,78 +461,15 @@ class Engine:
     def _run_explicit_batch(
         self, batch: _Batch, queue_seconds: float
     ) -> BatchDecodeResult:
-        with self._generation_lock:
-            logger.info(
-                "batch_running batch_id=%s batch_size=%d prompt_tokens=%d queue_ms=%.1f",
-                batch.request_id,
-                len(batch.input_ids),
-                sum(len(prompt) for prompt in batch.input_ids),
-                queue_seconds * 1_000,
-            )
-            return self.generator.run_batch(
-                batch.input_ids, batch.eos_token_id, batch.samplings
-            )
-
-    def _execute(self, jobs: tuple[Job[_Payload, _Result], ...]) -> tuple[_Result, ...]:
-        queue_seconds = [time.perf_counter() - job.enqueued_at for job in jobs]
-        first = jobs[0].payload
-        if isinstance(first, _Batch):
-            logger.info("batch_active batch_id=%s", first.request_id)
-            return (self._run_explicit_batch(first, queue_seconds[0]),)
-        requests = [job.payload for job in jobs]
-        if not all(isinstance(request, _Request) for request in requests):
-            raise RuntimeError("A scheduled batch cannot mix request types.")
-        typed_requests = [
-            request for request in requests if isinstance(request, _Request)
-        ]
-        for request, seconds in zip(typed_requests, queue_seconds, strict=True):
-            logger.info(
-                "request_active request_id=%s active_batch_size=%d queue_ms=%.1f",
-                request.request_id,
-                len(typed_requests),
-                seconds * 1_000,
-            )
-        if len(typed_requests) == 1:
-            return (self._run_one(typed_requests[0], queue_seconds[0]),)
-        with self._generation_lock:
-            prompt_lengths = [len(request.input_ids) for request in typed_requests]
-            output_limits = [
-                request.sampling.max_new_tokens for request in typed_requests
-            ]
-            padded_tokens = len(typed_requests) * (
-                max(prompt_lengths) + max(output_limits)
-            )
-            useful_tokens = sum(
-                prompt_length + output_limit
-                for prompt_length, output_limit in zip(
-                    prompt_lengths, output_limits, strict=True
-                )
-            )
-            logger.info(
-                "batch_running batch_size=%d request_ids=%s queue_ms=%s "
-                "prompt_tokens=%d-%d output_limits=%d-%d padded_tokens=%d "
-                "useful_tokens=%d padding_efficiency=%.3f",
-                len(typed_requests),
-                ",".join(request.request_id for request in typed_requests),
-                ",".join(f"{seconds * 1_000:.1f}" for seconds in queue_seconds),
-                min(prompt_lengths),
-                max(prompt_lengths),
-                min(output_limits),
-                max(output_limits),
-                padded_tokens,
-                useful_tokens,
-                useful_tokens / padded_tokens,
-            )
-            results = self.generator.run_scheduled_batch(
-                [request.input_ids for request in typed_requests],
-                typed_requests[0].eos_token_id,
-                [request.sampling for request in typed_requests],
-            )
-        return tuple(
-            self._finish_scheduled_request(result, seconds, request.request_id)
-            for result, seconds, request in zip(
-                results, queue_seconds, typed_requests, strict=True
-            )
+        logger.info(
+            "batch_running batch_id=%s batch_size=%d prompt_tokens=%d queue_ms=%.1f",
+            batch.request_id,
+            len(batch.input_ids),
+            sum(len(prompt) for prompt in batch.input_ids),
+            queue_seconds * 1_000,
+        )
+        return self.generator.run_batch(
+            batch.input_ids, batch.eos_token_id, batch.samplings
         )
 
     def _finish_scheduled_request(
@@ -279,12 +484,19 @@ class Engine:
         )
         logger.info(
             "request_completed request_id=%s finish_reason=%s output_tokens=%d "
-            "cache_hit=false cached_tokens=0 model_ttft_ms=%.1f "
+            "cache_hit=%s cached_tokens=%d model_ttft_ms=%.1f "
             "generation_tok_s=%.2f total_ms=%.1f",
             request_id,
             result.finish_reason,
             len(result.output_ids),
-            result.prefill_seconds * 1_000,
+            result.prefix.restored_tokens > 0,
+            result.prefix.restored_tokens,
+            (
+                result.prefix_lookup_seconds
+                + result.restore_seconds
+                + result.prefill_seconds
+            )
+            * 1_000,
             tokens_per_second,
             (queue_seconds + generation_seconds) * 1_000,
         )
@@ -321,42 +533,3 @@ class Engine:
                 f"Request needs {capacity:,} KV-cache tokens, but the profiled limit "
                 f"is {max_tokens:,}."
             )
-
-    def _can_add(
-        self,
-        active: tuple[Job[_Payload, _Result], ...],
-        candidate: Job[_Payload, _Result],
-    ) -> bool:
-        payloads = [job.payload for job in active]
-        if not isinstance(candidate.payload, _Request) or not all(
-            isinstance(payload, _Request) for payload in payloads
-        ):
-            return False
-        requests = [
-            payload for payload in payloads if isinstance(payload, _Request)
-        ] + [candidate.payload]
-        first = requests[0]
-        if any(
-            request.eos_token_id != first.eos_token_id
-            or request.sampling.temperature != first.sampling.temperature
-            or request.sampling.top_p != first.sampling.top_p
-            for request in requests[1:]
-        ):
-            return False
-        longest_prompt = max(len(request.input_ids) for request in requests)
-        max_new_tokens = max(request.sampling.max_new_tokens for request in requests)
-        shortest_prompt = min(len(request.input_ids) for request in requests)
-        shortest_max_new_tokens = min(
-            request.sampling.max_new_tokens for request in requests
-        )
-        capacity = longest_prompt + max_new_tokens
-        max_total_tokens = (
-            self.generator.cache.kv_budget_bytes // self.generator.cache.bytes_per_token
-        )
-        return (
-            longest_prompt <= shortest_prompt * self._batch_shape_ratio
-            and max_new_tokens
-            <= shortest_max_new_tokens * self._batch_shape_ratio
-            and capacity <= self.generator.decoder.model.config.context_length
-            and len(requests) * capacity <= max_total_tokens
-        )

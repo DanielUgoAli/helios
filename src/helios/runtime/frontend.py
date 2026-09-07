@@ -41,7 +41,9 @@ class ChatGeneration:
 
     @property
     def total_seconds(self) -> float:
-        return self.time_to_first_token_seconds + self.decode_seconds + self.store_seconds
+        return (
+            self.time_to_first_token_seconds + self.decode_seconds + self.store_seconds
+        )
 
     @property
     def generation_tokens_per_second(self) -> float | None:
@@ -183,14 +185,15 @@ class TextGenerator:
         )
 
         def run(token_ids: list[int], request_id: str) -> GenerationResult:
-            result = self._generate(
+            result = self.engine.run_warmup(
                 token_ids,
+                self.tokenizer.eos_token_id,
                 Sampling(
                     temperature=0,
                     top_p=1,
                     max_new_tokens=COMPILE_WARMUP_OUTPUT_TOKENS,
                 ),
-                request_id=request_id,
+                request_id,
             )
             if not 2 <= len(result.output_ids) <= COMPILE_WARMUP_OUTPUT_TOKENS:
                 raise RuntimeError(
