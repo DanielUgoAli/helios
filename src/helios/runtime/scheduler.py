@@ -22,7 +22,6 @@ class SchedulerClosedError(RuntimeError):
 class Job(Generic[Payload, Result]):
     payload: Payload
     request_ids: tuple[str, ...]
-    batchable: bool = True
     enqueued_at: float = field(default_factory=time.perf_counter)
     future: Future[Result] = field(default_factory=Future)
 
@@ -48,9 +47,6 @@ class Scheduler(Generic[Payload, Result]):
         self._closed = False
         self._worker = Thread(target=self._run, name="helios-scheduler", daemon=True)
         self._worker.start()
-
-    def submit(self, job: Job[Payload, Result]) -> Result:
-        return self.enqueue(job).result()
 
     def enqueue(self, job: Job[Payload, Result]) -> Future[Result]:
         with self._condition:
@@ -144,9 +140,9 @@ class Scheduler(Generic[Payload, Result]):
                     self._active = ()
 
     def _wait_for_initial_requests(self) -> None:
-        first = self._waiting[0]
-        if not first.batchable or self._max_batch_size == 1:
+        if self._max_batch_size == 1:
             return
+        first = self._waiting[0]
         deadline = first.enqueued_at + self._batch_wait_seconds
         while len(self._waiting) < self._max_batch_size and not self._closed:
             remaining = deadline - time.perf_counter()

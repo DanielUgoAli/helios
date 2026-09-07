@@ -69,14 +69,6 @@ class ChatGeneration:
         return self.cached_tokens / self.prompt_tokens
 
 
-@dataclass(frozen=True)
-class ChatBatchGeneration:
-    texts: list[str]
-    finish_reasons: list[str]
-    prompt_tokens: list[int]
-    completion_tokens: list[int]
-
-
 class TextGenerator:
     def __init__(self, tokenizer: Tokenizer, engine: Engine) -> None:
         self.tokenizer = tokenizer
@@ -91,23 +83,6 @@ class TextGenerator:
                 f"tokenizer={tokenizer.model_id}@{tokenizer.model_revision}, "
                 f"model={engine.model_id}@{engine.model_revision}."
             )
-
-    def run_chat_batch(
-        self,
-        messages: list[list[tuple[str, str]]],
-        samplings: list[Sampling],
-        request_id: str = "internal-batch",
-    ) -> ChatBatchGeneration:
-        input_ids = [self.tokenizer.tokenize_chat(item) for item in messages]
-        result = self.engine.run_batch(
-            input_ids, self.tokenizer.eos_token_id, samplings, request_id
-        )
-        return ChatBatchGeneration(
-            texts=[self.tokenizer.detokenize(tokens) for tokens in result.output_ids],
-            finish_reasons=result.finish_reasons,
-            prompt_tokens=[len(tokens) for tokens in input_ids],
-            completion_tokens=[len(tokens) for tokens in result.output_ids],
-        )
 
     def run_chat(
         self,

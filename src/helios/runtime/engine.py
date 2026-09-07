@@ -3,7 +3,6 @@ import time
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from threading import Lock
-from typing import cast
 
 from helios.config import HeliosConfig
 from helios.runtime.check import MemoryChecker
@@ -11,7 +10,6 @@ from helios.runtime.generate import GenerationResult, Generator, PrefixTrace
 from helios.runtime.load import Loader
 from helios.runtime.prefix_cache import PromptBlockView, describe_prompt_blocks
 from helios.runtime.qwen3.cache import KVCache
-from helios.runtime.qwen3.decode import BatchDecodeResult
 from helios.runtime.scheduler import Job, Scheduler
 from helios.runtime.types import Sampling
 
@@ -26,21 +24,9 @@ class _Request:
     request_id: str
 
 
-@dataclass(frozen=True)
-class _Batch:
-    input_ids: list[list[int]]
-    eos_token_id: int
-    samplings: list[Sampling]
-    request_id: str
-
-
-_Payload = _Request | _Batch
-_Result = GenerationResult | BatchDecodeResult
-
-
 @dataclass
 class _ActiveRequest:
-    job: Job[_Payload, _Result]
+    job: Job[_Request, GenerationResult]
     request: _Request
     slot: int
     output_ids: list[int]
@@ -76,7 +62,7 @@ class Engine:
         self._cohort_capacity = 0
         self._cohort_slots = 0
         self._draining_cohort = False
-        self._scheduler: Scheduler[_Payload, _Result] = Scheduler(
+        self._scheduler: Scheduler[_Request, GenerationResult] = Scheduler(
             self._continuous_tick,
             max_batch_size=config.max_batch_size,
             max_queue_size=config.max_queue_size,
@@ -170,12 +156,11 @@ class Engine:
         self._validate_request(input_ids, eos_token_id, sampling)
         logger.info("request_waiting request_id=%s", request_id)
         payload = _Request(input_ids, eos_token_id, sampling, request_id)
-        return cast(
-            Future[GenerationResult],
-            self._scheduler.enqueue(Job(payload=payload, request_ids=(request_id,))),
-        )
+        return self._scheduler.enqueue(Job(payload=payload, request_ids=(request_id,)))
 
-    def _continuous_tick(self, scheduler: Scheduler[_Payload, _Result]) -> bool:
+    def _continuous_tick(
+        self, scheduler: Scheduler[_Request, GenerationResult]
+    ) -> bool:
         """Advance active requests once, then fill any slots that became free."""
         with self._generation_lock:
             self._drop_cancelled_active()
@@ -190,34 +175,16 @@ class Engine:
             if not self._active_requests and self._cohort_cache is not None:
                 self._release_cohort()
 
-            head = scheduler.peek()
-            if not self._active_requests and isinstance(
-                head.payload if head is not None else None, _Batch
-            ):
-                job = scheduler.take(head)
-                if job is not None:
-                    batch = cast(_Batch, job.payload)
-                    try:
-                        result = self._run_explicit_batch(
-                            batch, time.perf_counter() - job.enqueued_at
-                        )
-                    except Exception as error:  # noqa: BLE001
-                        if not job.future.done():
-                            job.future.set_exception(error)
-                    else:
-                        if not job.future.done():
-                            job.future.set_result(result)
-                    scheduler.set_active(())
-                return scheduler.peek() is not None
-
             self._admit_requests(scheduler)
             scheduler.set_active(tuple(active.job for active in self._active_requests))
             return bool(self._active_requests or scheduler.peek() is not None)
 
-    def _admit_requests(self, scheduler: Scheduler[_Payload, _Result]) -> None:
+    def _admit_requests(
+        self, scheduler: Scheduler[_Request, GenerationResult]
+    ) -> None:
         while not self._draining_cohort:
             head = scheduler.peek()
-            if head is None or not isinstance(head.payload, _Request):
+            if head is None:
                 return
             request = head.payload
             needed = len(request.input_ids) + request.sampling.max_new_tokens
@@ -247,7 +214,7 @@ class Engine:
             job = scheduler.take(head)
             if job is None:
                 return
-            request = cast(_Request, job.payload)
+            request = job.payload
             queue_seconds = time.perf_counter() - job.enqueued_at
             logger.info(
                 "request_running request_id=%s prompt_tokens=%d max_new_tokens=%d queue_ms=%.1f",
@@ -433,44 +400,6 @@ class Engine:
         self._cohort_slots = 0
         self._draining_cohort = False
         self.generator.reserve_continuous_cache(0)
-
-    def run_batch(
-        self,
-        input_ids: list[list[int]],
-        eos_token_id: int,
-        samplings: list[Sampling],
-        request_id: str = "internal-batch",
-    ) -> BatchDecodeResult:
-        if len(input_ids) != len(samplings):
-            raise ValueError("Every prompt must have sampling settings.")
-        for prompt, sampling in zip(input_ids, samplings, strict=True):
-            self._validate_request(prompt, eos_token_id, sampling)
-        logger.info(
-            "batch_waiting batch_id=%s batch_size=%d", request_id, len(input_ids)
-        )
-        payload = _Batch(input_ids, eos_token_id, samplings, request_id)
-        result = self._scheduler.submit(
-            Job(payload=payload, request_ids=(request_id,), batchable=False)
-        )
-        if not isinstance(result, BatchDecodeResult):
-            raise TypeError(
-                "The scheduler returned a single-request result for a batch."
-            )
-        return result
-
-    def _run_explicit_batch(
-        self, batch: _Batch, queue_seconds: float
-    ) -> BatchDecodeResult:
-        logger.info(
-            "batch_running batch_id=%s batch_size=%d prompt_tokens=%d queue_ms=%.1f",
-            batch.request_id,
-            len(batch.input_ids),
-            sum(len(prompt) for prompt in batch.input_ids),
-            queue_seconds * 1_000,
-        )
-        return self.generator.run_batch(
-            batch.input_ids, batch.eos_token_id, batch.samplings
-        )
 
     def _finish_scheduled_request(
         self, result: GenerationResult, queue_seconds: float, request_id: str
