@@ -5,8 +5,9 @@ import torch
 from torch import nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from helios.runtime.qwen3.cache import KVCache
+from helios.runtime.qwen3.cache import BatchedKVCache, KVCache
 from helios.runtime.qwen3.config import Qwen3Config
+from helios.runtime.qwen3.paged_cache import PagedBatchCache
 
 
 class FeedForward(nn.Module):
@@ -118,7 +119,7 @@ class GroupedQueryAttention(nn.Module):
         *,
         is_causal: bool = False,
         start_pos: int = 0,
-        cache: KVCache | None = None,
+        cache: KVCache | BatchedKVCache | PagedBatchCache | None = None,
         layer_index: int = 0,
         position_ids: torch.Tensor | None = None,
         cache_slots: Sequence[int] | torch.Tensor | None = None,
@@ -153,6 +154,10 @@ class GroupedQueryAttention(nn.Module):
             start_pos=start_pos,
             position_ids=position_ids,
         )
+        if isinstance(cache, PagedBatchCache):
+            context = cache.attend(layer_index, queries, keys, values)
+            context = context.transpose(1, 2).reshape(batch_size, tokens, -1)
+            return self.output(context)
         if cache is not None:
             keys, values = cache.append(layer_index, keys, values, slots=cache_slots)
         force_flash = (
@@ -197,7 +202,7 @@ class TransformerBlock(nn.Module):
         *,
         is_causal: bool = False,
         start_pos: int = 0,
-        cache: KVCache | None = None,
+        cache: KVCache | BatchedKVCache | PagedBatchCache | None = None,
         layer_index: int = 0,
         position_ids: torch.Tensor | None = None,
         cache_slots: Sequence[int] | torch.Tensor | None = None,

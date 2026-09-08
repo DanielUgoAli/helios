@@ -4,9 +4,10 @@ import torch
 from torch import nn
 from torch.nn.attention.bias import causal_lower_right
 
-from helios.runtime.qwen3.cache import KVCache
+from helios.runtime.qwen3.cache import BatchedKVCache, KVCache
 from helios.runtime.qwen3.config import Qwen3Config
 from helios.runtime.qwen3.layers import RMSNorm, TransformerBlock, rope_parameters
+from helios.runtime.qwen3.paged_cache import PagedBatchCache
 
 
 class Qwen3Model(nn.Module):
@@ -31,7 +32,7 @@ class Qwen3Model(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        cache: KVCache | None = None,
+        cache: KVCache | BatchedKVCache | PagedBatchCache | None = None,
         position_ids: torch.Tensor | None = None,
         cache_slots: Sequence[int] | torch.Tensor | None = None,
     ) -> torch.Tensor:
@@ -54,12 +55,13 @@ class Qwen3Model(nn.Module):
         mask = None
         uniform_start = len(set(slot_starts)) == 1
         is_causal = False
-        if tokens > 1 and uniform_start:
+        paged = isinstance(cache, PagedBatchCache)
+        if not paged and tokens > 1 and uniform_start:
             if slot_starts[0] == 0:
                 is_causal = True
             else:
                 mask = causal_lower_right(tokens, key_length)
-        elif not uniform_start:
+        elif not paged and not uniform_start:
             key_positions = torch.arange(key_length, device=x.device)
             query_positions = starts[:, None] + torch.arange(tokens, device=x.device)
             mask = key_positions[None, None, :] <= query_positions[:, :, None]
@@ -86,7 +88,7 @@ class Qwen3Model(nn.Module):
     def _forward_uniform_cache(
         self,
         input_ids: torch.Tensor,
-        cache: KVCache | None,
+        cache: KVCache | PagedBatchCache | None,
         position_ids: torch.Tensor | None,
     ) -> torch.Tensor:
         start_pos = cache.length if cache is not None else 0
@@ -99,7 +101,7 @@ class Qwen3Model(nn.Module):
         tokens = x.shape[1]
         mask = None
         is_causal = False
-        if tokens > 1:
+        if tokens > 1 and not isinstance(cache, PagedBatchCache):
             if start_pos == 0:
                 is_causal = True
             else:
