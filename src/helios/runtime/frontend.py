@@ -147,10 +147,14 @@ class TextGenerator:
         if self._warmed:
             return
 
-        input_ids = self.tokenizer.tokenize_chat([("user", COMPILE_WARMUP_PROMPT)])
+        prompt = COMPILE_WARMUP_PROMPT
+        input_ids = self.tokenizer.tokenize_chat([("user", prompt)])
+        while len(input_ids) <= self.engine.generator.prefix_cache.block_size:
+            prompt += "\n\n" + COMPILE_WARMUP_PROMPT
+            input_ids = self.tokenizer.tokenize_chat([("user", prompt)])
         extended_ids = self.tokenizer.tokenize_chat(
             [
-                ("user", COMPILE_WARMUP_PROMPT),
+                ("user", prompt),
                 (
                     "assistant",
                     "Start with transaction integrity and cache invalidation.",
@@ -204,6 +208,8 @@ class TextGenerator:
         warmup_kv_bytes = (
             len(input_ids) + COMPILE_WARMUP_OUTPUT_TOKENS
         ) * self.engine.generator.cache.bytes_per_token
+        if self.engine.generator.paged_attention:
+            warmup_kv_bytes = 0
         self.engine.update_cache_capacity(
             warmup_peak_bytes=warmup_peak_bytes,
             warmup_kv_bytes=warmup_kv_bytes,

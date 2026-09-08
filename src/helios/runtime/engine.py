@@ -4,12 +4,15 @@ from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from threading import Lock
 
+import torch
+
 from helios.config import HeliosConfig
 from helios.runtime.check import MemoryChecker
 from helios.runtime.generate import GenerationResult, Generator, PrefixTrace
 from helios.runtime.load import Loader
 from helios.runtime.prefix_cache import PromptBlockView, describe_prompt_blocks
 from helios.runtime.qwen3.cache import KVCache
+from helios.runtime.qwen3.paged_cache import PagedKVCache
 from helios.runtime.scheduler import Job, Scheduler
 from helios.runtime.types import Sampling
 
@@ -28,7 +31,7 @@ class _Request:
 class _ActiveRequest:
     job: Job[_Request, GenerationResult]
     request: _Request
-    cache: KVCache
+    cache: KVCache | PagedKVCache
     reservation_bytes: int
     output_ids: list[int]
     pending_token_id: int
@@ -55,6 +58,7 @@ class Engine:
             loaded.cache,
             torch_compile=config.torch_compile,
             prefix_cache_ttl_seconds=config.prefix_cache_ttl_seconds,
+            paged_attention=config.paged_attention,
         )
         self._generation_lock = Lock()
         self._max_batch_size = config.max_batch_size
@@ -73,6 +77,11 @@ class Engine:
         warmup_kv_bytes: int,
     ) -> None:
         with self._generation_lock:
+            if self._active_requests:
+                raise RuntimeError("Cannot reprofile KV memory while requests are active.")
+            if self.generator.paged_attention:
+                self.generator.release_page_pool()
+                torch.cuda.empty_cache()
             cache = self._memory_checker.cache(
                 self.generator.decoder.model.config,
                 warmup_peak_bytes=warmup_peak_bytes,
@@ -101,8 +110,12 @@ class Engine:
     def close(self) -> None:
         self._scheduler.close()
         with self._generation_lock:
+            for active in self._active_requests:
+                self.generator.decoder.release_cache(active.cache)
             self._active_requests = []
             self.generator.reserve_active_cache(0)
+            if self.generator.paged_attention:
+                self.generator.release_page_pool()
 
     def run(
         self,
@@ -170,9 +183,7 @@ class Engine:
             scheduler.set_active(tuple(active.job for active in self._active_requests))
             return bool(self._active_requests or scheduler.peek() is not None)
 
-    def _admit_requests(
-        self, scheduler: Scheduler[_Request, GenerationResult]
-    ) -> None:
+    def _admit_requests(self, scheduler: Scheduler[_Request, GenerationResult]) -> None:
         if len(self._active_requests) >= self._max_batch_size:
             head = scheduler.peek()
             if head is not None:
@@ -189,19 +200,19 @@ class Engine:
             if head is None:
                 return
             request = head.payload
-            needed = len(request.input_ids) + request.sampling.max_new_tokens
-            reservation_bytes = needed * self.generator.cache.bytes_per_token
-            if reservation_bytes > self.generator.cache.kv_budget_bytes:
+            capacity = len(request.input_ids) + request.sampling.max_new_tokens
+            reservation_bytes = self.generator.request_cache_bytes(capacity)
+            if reservation_bytes > self.generator.kv_budget_bytes:
                 job = scheduler.take(head)
                 if job is not None and not job.future.done():
                     job.future.set_exception(
-                        RuntimeError("The FIFO request cannot fit in the KV-cache budget.")
+                        RuntimeError(
+                            "The FIFO request cannot fit in the KV-cache budget."
+                        )
                     )
                 continue
-            reserved = self._reserved_memory_bytes(
-                extra_capacity=needed,
-            )
-            if reserved > self.generator.cache.kv_budget_bytes:
+            reserved = self._reserved_memory_bytes(extra_capacity=capacity)
+            if reserved > self.generator.kv_budget_bytes:
                 logger.info(
                     "continuous_admission_blocked request_id=%s reason=memory "
                     "budget_bytes=%d active_request_ids=%s %s",
@@ -215,87 +226,80 @@ class Engine:
             job = scheduler.take(head)
             if job is None:
                 return
-            request = job.payload
-            queue_seconds = time.perf_counter() - job.enqueued_at
-            logger.info(
-                "request_running request_id=%s prompt_tokens=%d max_new_tokens=%d queue_ms=%.1f",
-                request.request_id,
-                len(request.input_ids),
-                request.sampling.max_new_tokens,
-                queue_seconds * 1_000,
+            self._start_request(job, reservation_bytes, reserved)
+
+    def _start_request(
+        self,
+        job: Job[_Request, GenerationResult],
+        reservation_bytes: int,
+        reserved_memory_bytes: int,
+    ) -> None:
+        request = job.payload
+        queue_seconds = time.perf_counter() - job.enqueued_at
+        logger.info(
+            "request_running request_id=%s prompt_tokens=%d max_new_tokens=%d queue_ms=%.1f",
+            request.request_id,
+            len(request.input_ids),
+            request.sampling.max_new_tokens,
+            queue_seconds * 1_000,
+        )
+        request_started = time.perf_counter()
+        prefill = None
+        active = None
+        try:
+            self.generator.reserve_active_cache(reserved_memory_bytes)
+            lookup_started = time.perf_counter()
+            prefix_hit = self.generator.prefix_cache.longest_prefix(request.input_ids)
+            prefix_lookup_seconds = time.perf_counter() - lookup_started
+            prefill = self.generator.decoder.prefill(
+                request.input_ids,
+                request.sampling,
+                max_total_tokens=self.generator.cache.max_tokens,
+                prefix_hit=prefix_hit,
             )
-            request_started = time.perf_counter()
-            prefill = None
-            active = None
-            try:
-                self.generator.reserve_active_cache(reserved)
-                lookup_started = time.perf_counter()
-                prefix_hit = self.generator.prefix_cache.longest_prefix(
-                    request.input_ids
-                )
-                prefix_lookup_seconds = time.perf_counter() - lookup_started
-                prefill = self.generator.decoder.prefill(
+            active = _ActiveRequest(
+                job=job,
+                request=request,
+                cache=prefill.cache,
+                reservation_bytes=reservation_bytes,
+                output_ids=[],
+                pending_token_id=0,
+                started_at=request_started,
+                prefill_seconds=prefill.prefill_seconds,
+                inter_token_seconds=[],
+                prefix_lookup_seconds=prefix_lookup_seconds,
+                restore_seconds=prefill.restore_seconds,
+                hit_tokens=0 if prefix_hit is None else prefix_hit.length,
+                restored_tokens=prefill.restored_tokens,
+                prompt_blocks=describe_prompt_blocks(
                     request.input_ids,
-                    request.sampling,
-                    max_total_tokens=self.generator.cache.max_tokens,
-                    prefix_hit=prefix_hit,
+                    self.generator.prefix_cache.block_size,
+                    prefix_hit,
+                ),
+            )
+            token_id = int(
+                self.generator.decoder._sample(prefill.logits, request.sampling).item()
+            )
+            if self._accept_token(active, token_id, queue_seconds):
+                self._active_requests.append(active)
+                logger.info(
+                    "continuous_admitted request_id=%s active_request_ids=%s %s",
+                    request.request_id,
+                    [item.request.request_id for item in self._active_requests],
+                    self._memory_log_fields(self._reserved_memory_bytes()),
                 )
-                active = _ActiveRequest(
-                    job=job,
-                    request=request,
-                    cache=prefill.cache,
-                    reservation_bytes=reservation_bytes,
-                    output_ids=[],
-                    pending_token_id=0,
-                    started_at=request_started,
-                    prefill_seconds=prefill.prefill_seconds,
-                    inter_token_seconds=[],
-                    prefix_lookup_seconds=prefix_lookup_seconds,
-                    restore_seconds=prefill.restore_seconds,
-                    hit_tokens=0 if prefix_hit is None else prefix_hit.length,
-                    restored_tokens=prefill.restored_tokens,
-                    prompt_blocks=describe_prompt_blocks(
-                        request.input_ids,
-                        self.generator.prefix_cache.block_size,
-                        prefix_hit,
-                    ),
-                )
-                token_id = int(
-                    self.generator.decoder._sample(
-                        prefill.logits, request.sampling
-                    ).item()
-                )
-                if token_id == request.eos_token_id:
-                    self._complete_request(active, "eos", queue_seconds)
-                    active = None
-                    prefill = None
-                    self.generator.reserve_active_cache(self._reserved_memory_bytes())
-                else:
-                    active.output_ids.append(token_id)
-                    if len(active.output_ids) == request.sampling.max_new_tokens:
-                        self._complete_request(active, "length", queue_seconds)
-                        active = None
-                        prefill = None
-                        self.generator.reserve_active_cache(
-                            self._reserved_memory_bytes()
-                        )
-                    else:
-                        active.pending_token_id = token_id
-                        self._active_requests.append(active)
-                        logger.info(
-                            "continuous_admitted request_id=%s active_request_ids=%s "
-                            "%s",
-                            request.request_id,
-                            [item.request.request_id for item in self._active_requests],
-                            self._memory_log_fields(self._reserved_memory_bytes()),
-                        )
-            except Exception as error:
-                if not job.future.done():
-                    job.future.set_exception(error)
+            else:
                 active = None
                 prefill = None
                 self.generator.reserve_active_cache(self._reserved_memory_bytes())
-                continue
+        except Exception as error:
+            if prefill is not None:
+                self.generator.decoder.release_cache(prefill.cache)
+            if not job.future.done():
+                job.future.set_exception(error)
+            active = None
+            prefill = None
+            self.generator.reserve_active_cache(self._reserved_memory_bytes())
 
     def _decode_active_requests(self) -> None:
         tokens = [active.pending_token_id for active in self._active_requests]
@@ -320,27 +324,33 @@ class Engine:
                 ).item()
             )
             active.inter_token_seconds.append(elapsed)
-            if token_id == active.request.eos_token_id:
-                self._complete_request(
-                    active, "eos", active.started_at - active.job.enqueued_at
-                )
-                continue
-            active.output_ids.append(token_id)
-            if len(active.output_ids) == active.request.sampling.max_new_tokens:
-                self._complete_request(
-                    active, "length", active.started_at - active.job.enqueued_at
-                )
-                continue
-            active.pending_token_id = token_id
-            surviving.append(active)
+            queue_seconds = active.started_at - active.job.enqueued_at
+            if self._accept_token(active, token_id, queue_seconds):
+                surviving.append(active)
         self._active_requests = surviving
         self.generator.reserve_active_cache(self._reserved_memory_bytes())
+
+    def _accept_token(
+        self, active: _ActiveRequest, token_id: int, queue_seconds: float
+    ) -> bool:
+        if token_id == active.request.eos_token_id:
+            self._complete_request(active, "eos", queue_seconds)
+            return False
+        active.output_ids.append(token_id)
+        if len(active.output_ids) == active.request.sampling.max_new_tokens:
+            self._complete_request(active, "length", queue_seconds)
+            return False
+        active.pending_token_id = token_id
+        return True
 
     def _drop_cancelled_active(self) -> None:
         surviving: list[_ActiveRequest] = []
         for active in self._active_requests:
             if active.job.future.cancelled():
-                logger.info("continuous_cancelled request_id=%s", active.request.request_id)
+                self.generator.decoder.release_cache(active.cache)
+                logger.info(
+                    "continuous_cancelled request_id=%s", active.request.request_id
+                )
             else:
                 surviving.append(active)
         self._active_requests = surviving
@@ -351,22 +361,26 @@ class Engine:
     ) -> None:
         store_started = time.perf_counter()
         try:
-            reserved = self._completion_reserved_memory_bytes(active)
-            stored_blocks = (
-                self.generator.prefix_cache.store_completed_blocks(
+            reserved = self._reserved_memory_bytes()
+            if all(item is not active for item in self._active_requests):
+                reserved = self._reserved_memory_bytes(
+                    extra_capacity=active.cache.capacity
+                )
+            stored_blocks = 0
+            if reserved <= self.generator.kv_budget_bytes:
+                stored_blocks = self.generator.prefix_cache.store_completed_blocks(
                     active.request.input_ids,
                     active.cache,
                     reserved_memory_bytes=reserved,
                 )
-                if reserved <= self.generator.cache.kv_budget_bytes
-                else 0
-            )
         except Exception:
             logger.exception(
                 "prefix_cache_store_failed request_id=%s",
                 active.request.request_id,
             )
             stored_blocks = 0
+        finally:
+            self.generator.decoder.release_cache(active.cache)
         store_seconds = time.perf_counter() - store_started
         result = GenerationResult(
             output_ids=active.output_ids,
@@ -397,6 +411,7 @@ class Engine:
 
     def _fail_active_requests(self, error: Exception) -> None:
         for active in self._active_requests:
+            self.generator.decoder.release_cache(active.cache)
             if not active.job.future.done():
                 active.job.future.set_exception(error)
         self._active_requests = []
@@ -408,47 +423,41 @@ class Engine:
         extra_capacity: int = 0,
         excluding: _ActiveRequest | None = None,
     ) -> int:
-        active = [
-            item for item in self._active_requests if item is not excluding
-        ]
+        active = [item for item in self._active_requests if item is not excluding]
         kv_bytes = sum(item.reservation_bytes for item in active)
         if extra_capacity:
-            kv_bytes += extra_capacity * self.generator.cache.bytes_per_token
+            kv_bytes += self.generator.request_cache_bytes(extra_capacity)
+        if self.generator.paged_attention:
+            return kv_bytes
         count = len(active) + bool(extra_capacity)
         if count < 2:
             return kv_bytes
-        lengths = [item.cache.capacity for item in active]
+        capacities = [item.cache.capacity for item in active]
         if extra_capacity:
-            lengths.append(extra_capacity)
-        per_layer_bytes = (
-            self.generator.cache.bytes_per_token
-            // self.generator.decoder.model.config.n_layers
-        )
-        max_capacity = max(lengths)
-        temporary_bytes = count * max_capacity * per_layer_bytes
+            capacities.append(extra_capacity)
+        model_config = self.generator.decoder.model.config
+        per_layer_bytes = self.generator.cache.bytes_per_token // model_config.n_layers
+        max_capacity = max(capacities)
+        batched_kv_bytes = count * max_capacity * per_layer_bytes
         attention_workspace_bytes = (
-            count
-            * self.generator.decoder.model.config.n_heads
-            * max_capacity
-            * (1 + 4)
+            count * model_config.n_heads * max_capacity * (1 + 4)
         )
-        return kv_bytes + temporary_bytes + attention_workspace_bytes
-
-    def _completion_reserved_memory_bytes(self, active: _ActiveRequest) -> int:
-        reserved = self._reserved_memory_bytes()
-        if all(item is not active for item in self._active_requests):
-            reserved = self._reserved_memory_bytes(extra_capacity=active.cache.capacity)
-        return reserved
+        return kv_bytes + batched_kv_bytes + attention_workspace_bytes
 
     def _memory_log_fields(self, kv_reserved_bytes: int) -> str:
         cache = self.generator.cache
         prefix_cache_bytes = self.generator.prefix_cache.memory_bytes
+        total_reserved_bytes = (
+            cache.device_occupied_bytes
+            + cache.activation_headroom_bytes
+            + kv_reserved_bytes
+            + prefix_cache_bytes
+        )
         return (
             f"kv_reserved_bytes={kv_reserved_bytes} "
             f"prefix_cache_bytes={prefix_cache_bytes} "
             f"activation_headroom_bytes={cache.activation_headroom_bytes} "
-            f"total_gpu_reserved_bytes="
-            f"{cache.device_occupied_bytes + cache.activation_headroom_bytes + kv_reserved_bytes + prefix_cache_bytes}"
+            f"total_gpu_reserved_bytes={total_reserved_bytes}"
         )
 
     def _finish_scheduled_request(
@@ -484,7 +493,8 @@ class Engine:
     def _validate_request(
         self, input_ids: list[int], eos_token_id: int, sampling: Sampling
     ) -> None:
-        vocabulary_size = self.generator.decoder.model.config.vocab_size
+        model_config = self.generator.decoder.model.config
+        vocabulary_size = model_config.vocab_size
         if not input_ids:
             raise ValueError("A request prompt must contain at least one token.")
         token_ids = [eos_token_id, *input_ids]
@@ -498,14 +508,14 @@ class Engine:
                 f"Token IDs must be between 0 and {vocabulary_size - 1:,}."
             )
         capacity = len(input_ids) + sampling.max_new_tokens
-        context_length = self.generator.decoder.model.config.context_length
+        context_length = model_config.context_length
         if capacity > context_length:
             raise ValueError(
                 f"Request needs {capacity:,} cache positions, but the model supports "
                 f"{context_length:,}."
             )
         max_tokens = (
-            self.generator.cache.kv_budget_bytes // self.generator.cache.bytes_per_token
+            self.generator.kv_budget_bytes // self.generator.cache.bytes_per_token
         )
         if capacity > max_tokens:
             raise ValueError(

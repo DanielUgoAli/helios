@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from helios.runtime.qwen3.cache import KVBlockSnapshot, KVCache
+from helios.runtime.qwen3.paged_cache import PagedKVBlockSnapshot, PagedKVCache
 
 
 @dataclass(frozen=True)
@@ -19,7 +20,7 @@ class TokenBlock:
 @dataclass
 class CachedBlock:
     tokens: tuple[int, ...]
-    snapshot: KVBlockSnapshot
+    snapshot: KVBlockSnapshot | PagedKVBlockSnapshot
     hash: str = ""
     parent_hash: str = ""
     hit_count: int = 0
@@ -86,7 +87,6 @@ def split_token_stream(
 def hash_token_blocks(blocks: Sequence[Sequence[int]]) -> list[TokenBlock]:
     hashed_blocks: list[TokenBlock] = []
     parent_digest = b""
-    parent_hex = ""
 
     for block in blocks:
         tokens = tuple(block)
@@ -101,10 +101,9 @@ def hash_token_blocks(blocks: Sequence[Sequence[int]]) -> list[TokenBlock]:
         payload = json.dumps(tokens, separators=(",", ":")).encode("ascii")
         digest = hashlib.sha256(parent_digest + payload).digest()
         hashed_blocks.append(
-            TokenBlock(tokens=tokens, hash=digest.hex(), parent_hash=parent_hex)
+            TokenBlock(tokens=tokens, hash=digest.hex(), parent_hash=parent_digest.hex())
         )
         parent_digest = digest
-        parent_hex = digest.hex()
 
     return hashed_blocks
 
@@ -225,7 +224,7 @@ class PrefixCache:
     def store_completed_blocks(
         self,
         token_ids: Sequence[int],
-        cache: KVCache,
+        cache: KVCache | PagedKVCache,
         *,
         reserved_memory_bytes: int = 0,
         slot: int = 0,
@@ -233,40 +232,36 @@ class PrefixCache:
         now = self._clock()
         self._purge_expired(now)
         completed_length = len(token_ids) // self.block_size * self.block_size
-        cache_length = cache.slot_length(slot)
-        if completed_length > cache_length:
+        if completed_length > cache.slot_length(slot):
             raise ValueError("KV cache has not processed every completed token block.")
 
         blocks = build_token_blocks(token_ids[:completed_length], self.block_size)
-        available_bytes = (
-            None
-            if self.max_memory_bytes is None
-            else self.max_memory_bytes - reserved_memory_bytes
-        )
-        if available_bytes is not None and available_bytes < 0:
-            raise ValueError("Reserved memory must fit within the KV-cache budget.")
+        available_bytes = self.max_memory_bytes
+        if available_bytes is not None:
+            available_bytes -= reserved_memory_bytes
+            if available_bytes < 0:
+                raise ValueError("Reserved memory must fit within the KV-cache budget.")
         snapshot_bytes = cache.memory_bytes_per_slot_token * self.block_size
         if available_bytes is not None and snapshot_bytes > available_bytes:
             return 0
 
         stored = 0
-        protected: set[str] = set()
+        protected_hashes: set[str] = set()
         for index, block in enumerate(blocks):
             if block.hash in self._blocks:
-                protected.add(block.hash)
+                protected_hashes.add(block.hash)
                 continue
             if block.parent_hash and block.parent_hash not in self._blocks:
                 break
-            start = index * self.block_size
-            end = start + self.block_size
             if available_bytes is not None and not self._evict_to(
                 available_bytes - snapshot_bytes,
-                protected_hashes=protected,
+                protected_hashes=protected_hashes,
             ):
                 break
             if block.parent_hash and block.parent_hash not in self._blocks:
                 break
-            snapshot = cache.snapshot_block_slot(slot, start, end)
+            start = index * self.block_size
+            snapshot = cache.snapshot_block_slot(slot, start, start + self.block_size)
             self._blocks[block.hash] = CachedBlock(
                 tokens=block.tokens,
                 snapshot=snapshot,
@@ -275,7 +270,7 @@ class PrefixCache:
                 expires_at=now + self.ttl_seconds,
             )
             self._memory_bytes += snapshot_bytes
-            protected.add(block.hash)
+            protected_hashes.add(block.hash)
             stored += 1
         return stored
 
@@ -299,8 +294,7 @@ class PrefixCache:
             if block.expires_at <= now
         ]
         for block_hash in expired:
-            if block_hash in self._blocks:
-                self._remove(block_hash)
+            self._remove(block_hash)
 
     def _evict_to(
         self,
@@ -315,18 +309,12 @@ class PrefixCache:
                 for block in self._blocks.values()
                 if block.parent_hash
             }
-            victim = next(
-                (
-                    block_hash
-                    for block_hash in self._blocks
-                    if block_hash not in protected_hashes
-                    and block_hash not in parent_hashes
-                ),
-                None,
-            )
-            if victim is None:
+            for block_hash in self._blocks:
+                if block_hash not in protected_hashes and block_hash not in parent_hashes:
+                    break
+            else:
                 return False
-            self._remove(victim)
+            self._remove(block_hash)
         return True
 
     def _remove(self, block_hash: str) -> None:
@@ -336,7 +324,9 @@ class PrefixCache:
         self._reclaimed_memory_bytes += memory_bytes
 
     @staticmethod
-    def _snapshot_bytes(snapshot: KVBlockSnapshot) -> int:
+    def _snapshot_bytes(snapshot: KVBlockSnapshot | PagedKVBlockSnapshot) -> int:
+        if isinstance(snapshot, PagedKVBlockSnapshot):
+            return snapshot.memory_bytes
         return sum(
             tensor.numel() * tensor.element_size()
             for layer in snapshot.layers
