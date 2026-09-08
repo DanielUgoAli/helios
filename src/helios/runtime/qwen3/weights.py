@@ -34,7 +34,6 @@ class Qwen3Weights:
             del shard
             gc.collect()
         missing = set(targets) - loaded
-        # Qwen ties lm_head to the token embedding, so it is already populated.
         if missing != {"lm_head.weight"}:
             names = ", ".join(sorted(missing))
             raise ValueError(f"The Qwen3 snapshot is missing required weights: {names}")
