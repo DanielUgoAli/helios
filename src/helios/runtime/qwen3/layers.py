@@ -1,7 +1,9 @@
 from collections.abc import Sequence
+from contextlib import nullcontext
 
 import torch
 from torch import nn
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from helios.runtime.qwen3.cache import KVCache
 from helios.runtime.qwen3.config import Qwen3Config
@@ -153,15 +155,27 @@ class GroupedQueryAttention(nn.Module):
         )
         if cache is not None:
             keys, values = cache.append(layer_index, keys, values, slots=cache_slots)
-        context = torch.nn.functional.scaled_dot_product_attention(
-            queries,
-            keys,
-            values,
-            attn_mask=mask,
-            dropout_p=0.0,
-            is_causal=is_causal,
-            enable_gqa=self.group_size > 1,
+        force_flash = (
+            mask is None
+            and queries.is_cuda
+            and torch.backends.cuda.is_flash_attention_available()
+            and torch.cuda.get_device_capability(queries.device)[0] >= 8
         )
+        kernel = (
+            sdpa_kernel(SDPBackend.FLASH_ATTENTION)
+            if force_flash
+            else nullcontext()
+        )
+        with kernel:
+            context = torch.nn.functional.scaled_dot_product_attention(
+                queries,
+                keys,
+                values,
+                attn_mask=mask,
+                dropout_p=0.0,
+                is_causal=is_causal,
+                enable_gqa=self.group_size > 1,
+            )
         context = context.transpose(1, 2).reshape(batch_size, tokens, -1)
         return self.output(context)
 
