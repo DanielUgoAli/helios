@@ -2,6 +2,7 @@ from collections.abc import Sequence
 
 import torch
 from torch import nn
+from torch.nn.attention.bias import causal_lower_right
 
 from helios.runtime.qwen3.cache import KVCache
 from helios.runtime.qwen3.config import Qwen3Config
@@ -50,17 +51,27 @@ class Qwen3Model(nn.Module):
         ends = starts + tokens
         x = self.token_embedding(input_ids)
         key_length = max(start + tokens for start in slot_starts)
-        key_positions = torch.arange(key_length, device=x.device)
-        query_positions = starts[:, None] + torch.arange(tokens, device=x.device)
-        mask = key_positions[None, None, :] <= query_positions[:, :, None]
-        mask &= key_positions[None, None, :] < ends[:, None, None]
-        mask = mask[:, None, :, :]
+        mask = None
+        uniform_start = len(set(slot_starts)) == 1
+        is_causal = False
+        if tokens > 1 and uniform_start:
+            if slot_starts[0] == 0:
+                is_causal = True
+            else:
+                mask = causal_lower_right(tokens, key_length)
+        elif not uniform_start:
+            key_positions = torch.arange(key_length, device=x.device)
+            query_positions = starts[:, None] + torch.arange(tokens, device=x.device)
+            mask = key_positions[None, None, :] <= query_positions[:, :, None]
+            mask &= key_positions[None, None, :] < ends[:, None, None]
+            mask = mask[:, None, :, :]
         for index, block in enumerate(self.blocks):
             x = block(
                 x,
                 mask,
                 self.cos,
                 self.sin,
+                is_causal=is_causal,
                 start_pos=slot_starts[0],
                 cache=cache,
                 layer_index=index,
@@ -87,16 +98,19 @@ class Qwen3Model(nn.Module):
         x = self.token_embedding(input_ids)
         tokens = x.shape[1]
         mask = None
+        is_causal = False
         if tokens > 1:
-            query_positions = torch.arange(start_pos, end_pos, device=x.device)
-            key_positions = torch.arange(end_pos, device=x.device)
-            mask = key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)
+            if start_pos == 0:
+                is_causal = True
+            else:
+                mask = causal_lower_right(tokens, end_pos)
         for index, block in enumerate(self.blocks):
             x = block(
                 x,
                 mask,
                 self.cos,
                 self.sin,
+                is_causal=is_causal,
                 start_pos=start_pos,
                 cache=cache,
                 layer_index=index,

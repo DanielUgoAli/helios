@@ -114,6 +114,7 @@ class GroupedQueryAttention(nn.Module):
         cos: torch.Tensor,
         sin: torch.Tensor,
         *,
+        is_causal: bool = False,
         start_pos: int = 0,
         cache: KVCache | None = None,
         layer_index: int = 0,
@@ -158,6 +159,7 @@ class GroupedQueryAttention(nn.Module):
             values,
             attn_mask=mask,
             dropout_p=0.0,
+            is_causal=is_causal,
             enable_gqa=self.group_size > 1,
         )
         context = context.transpose(1, 2).reshape(batch_size, tokens, -1)
@@ -179,6 +181,7 @@ class TransformerBlock(nn.Module):
         cos: torch.Tensor,
         sin: torch.Tensor,
         *,
+        is_causal: bool = False,
         start_pos: int = 0,
         cache: KVCache | None = None,
         layer_index: int = 0,
@@ -190,6 +193,7 @@ class TransformerBlock(nn.Module):
             mask,
             cos,
             sin,
+            is_causal=is_causal,
             start_pos=start_pos,
             cache=cache,
             layer_index=layer_index,
