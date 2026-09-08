@@ -50,7 +50,7 @@ class Scheduler(Generic[Payload, Result]):
         with self._condition:
             if self._closed:
                 raise SchedulerClosedError("The generation scheduler is closed.")
-            self._discard_cancelled_waiting()
+            self._remove_cancelled_jobs()
             if len(self._waiting) >= self._max_queue_size:
                 raise QueueFullError("The generation waiting queue is full.")
             self._waiting.append(job)
@@ -59,17 +59,17 @@ class Scheduler(Generic[Payload, Result]):
 
     def peek(self) -> Job[Payload, Result] | None:
         with self._condition:
-            self._discard_cancelled_waiting()
+            self._remove_cancelled_jobs()
             return self._waiting[0] if self._waiting else None
 
     def take(
         self, expected: Job[Payload, Result] | None = None
     ) -> Job[Payload, Result] | None:
         with self._condition:
-            self._discard_cancelled_waiting()
-            if expected is not None and (
-                not self._waiting or self._waiting[0] is not expected
-            ):
+            self._remove_cancelled_jobs()
+            if not self._waiting:
+                return None
+            if expected is not None and self._waiting[0] is not expected:
                 return None
             while self._waiting:
                 job = self._waiting.popleft()
@@ -113,43 +113,47 @@ class Scheduler(Generic[Payload, Result]):
         self._worker.join()
 
     def _run(self) -> None:
-        while True:
-            with self._condition:
-                self._discard_cancelled_waiting()
-                while not self._waiting and not self._active and not self._closed:
-                    self._condition.wait()
-                    self._discard_cancelled_waiting()
-                if self._closed:
-                    return
-                if not self._active:
-                    self._wait_for_initial_requests()
+        while self._wait_for_work():
             try:
-                has_active = self._tick(self)
+                has_work = self._tick(self)
             except Exception as error:
-                with self._condition:
-                    active = self._active
-                    self._active = ()
-                for job in active:
-                    if not job.future.done():
-                        job.future.set_exception(error)
-                has_active = False
-            if not has_active:
-                with self._condition:
-                    self._active = ()
+                self._fail_active_jobs(error)
+                has_work = False
+            if not has_work:
+                self.set_active(())
 
-    def _wait_for_initial_requests(self) -> None:
+    def _wait_for_work(self) -> bool:
+        with self._condition:
+            self._remove_cancelled_jobs()
+            while not self._waiting and not self._active and not self._closed:
+                self._condition.wait()
+                self._remove_cancelled_jobs()
+            if self._closed:
+                return False
+            if not self._active:
+                self._wait_for_batch()
+            return True
+
+    def _wait_for_batch(self) -> None:
         if self._max_batch_size == 1:
             return
-        first = self._waiting[0]
-        deadline = first.enqueued_at + self._batch_wait_seconds
+        deadline = self._waiting[0].enqueued_at + self._batch_wait_seconds
         while len(self._waiting) < self._max_batch_size and not self._closed:
             remaining = deadline - time.perf_counter()
             if remaining <= 0:
                 return
             self._condition.wait(remaining)
-            self._discard_cancelled_waiting()
+            self._remove_cancelled_jobs()
 
-    def _discard_cancelled_waiting(self) -> None:
+    def _fail_active_jobs(self, error: Exception) -> None:
+        with self._condition:
+            active = self._active
+            self._active = ()
+        for job in active:
+            if not job.future.done():
+                job.future.set_exception(error)
+
+    def _remove_cancelled_jobs(self) -> None:
         self._waiting = deque(
             job for job in self._waiting if not job.future.cancelled()
         )
