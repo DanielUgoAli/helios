@@ -299,4 +299,4 @@ measure the effect before adding the next optimization.
 
 ## License
 
-Helios is released under the [MIT License](LICENSE).
+Helios is released under the [Apache License 2.0](LICENSE).
