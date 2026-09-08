@@ -14,11 +14,13 @@ change over a broad feature set.
 - A native PyTorch implementation of Qwen3-4B
 - Grouped-query attention, rotary position embeddings, RMS normalization, and
   SwiGLU feed-forward layers
+- PyTorch scaled-dot-product attention with Flash Attention selected for
+  eligible unmasked CUDA paths
 - Hugging Face tokenization and safetensor weight loading
 - Single-request prefill and token-by-token decode
-- Static batching through an explicit batch request
 - Continuous batching of concurrent requests
-- Stable-slot KV caches and a persistent, block-based prefix cache
+- Per-request KV caches and a persistent, block-based prefix cache
+- Optional native paged attention with a shared 256-token page pool
 - GPU-memory admission checks and a shared active/prefix KV budget
 - A non-streaming OpenAI-style chat completions endpoint
 - A concurrent HTTP benchmark with per-request and aggregate timing data
@@ -100,25 +102,25 @@ the rest of the OpenAI API are not implemented.
 ### Continuous batching
 
 Clients send ordinary chat-completion requests concurrently. The scheduler
-holds the first request for a short admission window, creates a fixed pool of
-KV-cache slots within the profiled memory budget, and prefills waiting requests
-into free slots. Active requests share each one-token decode step, but finish
-independently; a completed request returns immediately and its slot can be
-reused by the next request.
+holds the first request for a short admission window, then prefills each
+admitted request into its own exact-capacity KV cache. Active requests share
+each one-token decode step, but finish independently; completed requests release
+only their own cache reservation while survivors keep decoding unchanged.
 
-The oldest waiting request controls admission. If it needs a larger cache slot,
-Helios stops admitting later work, drains the current pool, and starts a new one.
-This keeps the policy FIFO without adding a separate fairness mechanism.
+Admission is strict FIFO. The queue head joins whenever an active-request slot
+and the shared KV-memory budget, including temporary batched-attention storage,
+permit it. A larger waiting request never drains or rebuilds existing requests;
+it waits until enough memory is released.
 
 ```mermaid
 flowchart LR
     R1[Request A] --> Q[Bounded queue]
     R2[Request B] --> Q
     R3[Request C] --> Q
-    Q --> P[Prefill into free stable slot]
+    Q --> P[Prefill into per-request KV cache]
     P --> D[One-token batched decode]
     D --> F{Request finished?}
-    F -->|yes| S[Return result and free slot]
+    F -->|yes| S[Return result and release reservation]
     F -->|no| D
     S --> P
 ```
@@ -127,15 +129,30 @@ Continuous requests restore and retain prompt blocks through the persistent
 prefix cache. Prefill is deliberately per request; batching is applied to the
 repeated decode step where it matters most.
 
-### Explicit static batching
+### Paged attention
 
-Send `{"requests": [request, ...]}` to the same endpoint to execute one
-explicit batch of 1–32 requests. Every item must use the loaded model and all
-items must share `temperature` and `top_p`. The response object is
-`chat.completion.batch` with one indexed result per input request.
+Enable the optional native PyTorch paged-attention path with:
 
-Explicit batches are kept intact, do not join continuous batches, and do not use
-the persistent prefix cache.
+```bash
+HELIOS_PAGED_ATTENTION=1 HELIOS_TORCH_COMPILE=0 uv run helios
+```
+
+This requires PyTorch 2.13 and an Ampere or newer NVIDIA GPU (SM80+) with
+FP16 or BF16 weights. A fixed KV pool holds 256-token pages. Each request owns
+a page table; prefill and decode read those pages directly through PyTorch's
+`varlen_attn`, without rebuilding a padded batch of K/V tensors. There is no
+additional kernel dependency.
+
+Completed prefix pages share the same storage. Pages return to the pool when
+their last request or prefix-cache reference is released. In this mode prefix
+blocks are also 256 tokens, so shorter prefixes are not cached. Admission still
+reserves the request's maximum length, rounded up to whole pages, to guarantee
+space for decode. Evicting prefix entries frees pages within the pool rather
+than returning its backing memory to CUDA.
+
+Paging is off by default, and whole-model `torch.compile` is currently unavailable
+in this mode. CUDA numerical tests are included but require a compatible GPU;
+CPU checks exercise a reference attention implementation, not the CUDA kernel.
 
 ## Architecture
 
@@ -147,21 +164,18 @@ flowchart TD
     Q --> E[Engine]
 
     E --> P[Prefix-cache lookup]
-    P --> G[Prefill into stable KV slot]
+    P --> G[Prefill into per-request KV cache]
     G --> PC[(Persistent prefix cache)]
 
-    E -->|active slots| BG[One-token batched decode]
-    E -->|explicit batch| SB[Padded static batch]
+    E -->|active requests| BG[One-token batched decode]
 
     G --> M[Native Qwen3 model]
     BG --> M
-    SB --> M
-    M --> K[Stable-slot KV state]
+    M --> K[Per-request KV state]
     K --> GPU[NVIDIA CUDA GPU]
 
     G --> O[Detokenize and format]
     BG --> O
-    SB --> O
     O --> C
 ```
 
@@ -179,10 +193,15 @@ Completed prompt blocks can then be retained for later requests. Cache entries
 have a sliding TTL and are evicted least-recently-used when active KV needs
 space.
 
-Continuous requests use stable cache rows with independent logical lengths.
-New prompts enter free rows while existing rows keep decoding, and finished
-rows are cleared for reuse. Explicit batches remain a separate padded path.
-Both paths must fit the model context window and shared KV budget.
+Continuous requests use independent KV caches with their own logical lengths.
+New prompts join active decoding when a request slot and memory are available;
+finished requests release their allocations without disturbing survivors. Every
+request must fit the model context window and the shared KV budget.
+
+Cold prefills use causal scaled-dot-product attention without materializing a
+dense mask. On supported NVIDIA GPUs, eligible unmasked attention calls are
+forced through PyTorch's Flash Attention backend; masked paths continue through
+PyTorch's normal backend selection.
 
 ## Diagnostics and logs
 
@@ -191,9 +210,9 @@ count, memory use, capacity, hashes, and hit counts. It is an unprotected
 diagnostic endpoint, so do not expose it on an untrusted network.
 
 The server logs request IDs and execution events without logging prompt or
-generated text. Useful events include queue admission, active-batch selection,
-batch padding efficiency, prefix-cache hits and stores, generation progress,
-completion, rejection, and failure.
+generated text. Useful events include FIFO admissions, active decode membership,
+memory or slot admission blocks, prefix-cache hits and stores, completion,
+rejection, and failure.
 
 ## Configuration
 
@@ -205,11 +224,12 @@ Helios loads a local `.env` file automatically.
 | `HELIOS_MODEL_REVISION` | latest resolved snapshot | Pins tokenizer and model files to a Hugging Face revision. |
 | `HF_TOKEN` / `HF_API_KEY` | unset | Hugging Face authentication. |
 | `HELIOS_TORCH_COMPILE` | `0` | Set to `1`, `true`, or `yes` to compile the model with dynamic shapes. |
+| `HELIOS_PAGED_ATTENTION` | `0` | Use native paged attention and shared 256-token KV/prefix pages; requires `HELIOS_TORCH_COMPILE=0`. |
 | `HELIOS_MAX_GPU_UTILIZATION` | `0.90` | Fraction of total GPU memory available to model residency, activation reserve, and KV state. |
 | `HELIOS_WEIGHT_HEADROOM_RATIO` | `0.20` | Additional free-memory requirement before loading weights. |
 | `HELIOS_KV_CACHE_HEADROOM_RATIO` | `0.20` | Safety margin above measured warmup activation memory. |
 | `HELIOS_PREFIX_CACHE_TTL_SECONDS` | `300` | Sliding lifetime of a cached prompt block. |
-| `HELIOS_MAX_BATCH_SIZE` | `8` | Maximum number of active continuous requests in one KV-cache pool. |
+| `HELIOS_MAX_BATCH_SIZE` | `8` | Maximum number of concurrently active continuous requests. |
 | `HELIOS_MAX_QUEUE_SIZE` | `32` | Maximum number of waiting jobs; excess work receives HTTP 503. |
 | `HELIOS_BATCH_WAIT_MS` | `2` | Initial admission window after the first queued request arrives. |
 
@@ -227,15 +247,15 @@ second terminal:
 HELIOS_TORCH_COMPILE=1 uv run helios
 
 # Terminal 2
-uv run python benchmarks/run.py --label dynamic-batch
-uv run python benchmarks/run.py --label dynamic-batch --concurrency 16
+uv run python benchmarks/run.py --label continuous-batch
+uv run python benchmarks/run.py --label continuous-batch --concurrency 16
 ```
 
 The runner validates `dataset.json`, checks server health, sends one isolated
 post-health warmup, and then submits dataset requests concurrently. The server's
-scheduler—not the benchmark client—forms continuous decode batches. Results are written
-to `benchmarks/results/` with raw per-request timings and aggregate elapsed time
-and output throughput.
+scheduler—not the benchmark client—forms continuous decode batches. Responses
+are printed as they finish. Results are written to `benchmarks/results/` with
+raw per-request timings and aggregate elapsed time and output throughput.
 
 Use `--dataset /path/to/dataset.json` for another versioned request set and
 `--base-url` or `HELIOS_BASE_URL` for a remote server. See
@@ -250,7 +270,7 @@ src/helios/
 │   ├── qwen3/           # Model, layers, weights, decoding, and KV state
 │   ├── engine.py        # Continuous admission and iteration loop
 │   ├── frontend.py      # Chat tokenization and response conversion
-│   ├── generate.py      # Single, static, and scheduled generation paths
+│   ├── generate.py      # Single-request warmup and prefix-cache generation
 │   ├── prefix_cache.py  # Hashed prompt blocks and K/V snapshots
 │   └── scheduler.py     # Bounded FIFO queue and worker lifecycle
 ├── config.py            # Environment-backed runtime configuration
@@ -262,11 +282,11 @@ dataset.json             # Default benchmark workload
 ## Current scope
 
 Helios deliberately keeps serving small and inspectable. It does not provide
-streaming, paged attention, quantization, multi-model serving, distributed
-execution, optimized custom kernels, or production controls such as
-authentication and rate limiting. Continuous batching uses a fixed dense slot
-pool; it does not yet implement paged attention, chunked prefill, or batched
-prefill.
+streaming, quantization, multi-model serving, distributed execution, optimized
+custom kernels, or production controls such as authentication and rate
+limiting. Continuous batching still prefills one request at a time. The default
+decode path uses independent dense per-request caches; native paged attention is
+opt-in and does not add chunked prefill or batched prefill.
 
 The goal is to keep a correct, understandable baseline for each mechanism and
 measure the effect before adding the next optimization.
