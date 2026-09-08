@@ -12,6 +12,7 @@ from helios.runtime.prefix_cache import (
 )
 from helios.runtime.qwen3.decode import Decoder
 from helios.runtime.qwen3.model import Qwen3Model
+from helios.runtime.qwen3.paged_cache import KVPagePool
 from helios.runtime.types import Sampling
 
 PREFIX_CACHE_BLOCK_SIZE = 16
@@ -56,23 +57,65 @@ class Generator:
         cache: CacheCapacity,
         torch_compile: bool = False,
         prefix_cache_ttl_seconds: float = 300.0,
+        paged_attention: bool = False,
     ) -> None:
+        if paged_attention and torch_compile:
+            raise ValueError("Paged attention currently requires torch_compile=False.")
         self.decoder = Decoder(model, torch_compile=torch_compile)
         self.cache = cache
+        self.paged_attention = paged_attention
         self.prefix_cache = PrefixCache(
-            block_size=PREFIX_CACHE_BLOCK_SIZE,
+            block_size=256 if paged_attention else PREFIX_CACHE_BLOCK_SIZE,
             max_memory_bytes=cache.kv_budget_bytes,
             ttl_seconds=prefix_cache_ttl_seconds,
         )
+        if paged_attention:
+            self._create_page_pool()
+
+    def _create_page_pool(self) -> None:
+        page_size = self.prefix_cache.block_size
+        num_pages = self.cache.kv_budget_bytes // (page_size * self.cache.bytes_per_token)
+        if num_pages < 1:
+            raise ValueError("The KV budget must hold at least one attention page.")
+        device = self.decoder.device
+        if device.type == "cuda" and (
+            torch.cuda.get_device_capability(device)[0] < 8
+            or self.decoder.model.config.dtype not in {torch.float16, torch.bfloat16}
+        ):
+            raise ValueError("Paged attention requires an SM80+ GPU and FP16 or BF16.")
+        self.decoder.page_pool = KVPagePool(
+            self.decoder.model.config, num_pages, device=device, page_size=page_size
+        )
+        self.prefix_cache.max_memory_bytes = (
+            num_pages * page_size * self.cache.bytes_per_token
+        )
+
+    def release_page_pool(self) -> None:
+        self.prefix_cache.clear()
+        self.decoder.page_pool = None
+
+    def request_cache_bytes(self, capacity: int) -> int:
+        if self.paged_attention:
+            size = self.prefix_cache.block_size
+            capacity = (capacity + size - 1) // size * size
+        return capacity * self.cache.bytes_per_token
+
+    @property
+    def kv_budget_bytes(self) -> int:
+        return int(self.prefix_cache.max_memory_bytes)
 
     def update_cache_capacity(self, cache: CacheCapacity) -> None:
         self.cache = cache
+        if self.paged_attention:
+            self._create_page_pool()
+            return
         self.prefix_cache.max_memory_bytes = cache.kv_budget_bytes
         if self.prefix_cache.reserve(0):
             torch.cuda.empty_cache()
 
     def reserve_active_cache(self, memory_bytes: int) -> None:
-        if self.prefix_cache.reserve(memory_bytes):
+        reclaimed = self.prefix_cache.reserve(memory_bytes)
+        if reclaimed and not self.paged_attention:
             torch.cuda.empty_cache()
 
     def run(
@@ -83,17 +126,16 @@ class Generator:
         *,
         request_id: str = "internal",
     ) -> GenerationResult:
-        request_cache_bytes = (
+        request_cache_bytes = self.request_cache_bytes(
             len(input_ids) + sampling.max_new_tokens
-        ) * self.cache.bytes_per_token
-        if request_cache_bytes > self.cache.kv_budget_bytes:
+        )
+        if request_cache_bytes > self.kv_budget_bytes:
             requested_tokens = len(input_ids) + sampling.max_new_tokens
             raise ValueError(
                 f"Request needs {requested_tokens:,} KV-cache tokens, but the profiled "
                 f"limit is {self.cache.max_tokens:,}."
             )
-        if self.prefix_cache.reserve(request_cache_bytes):
-            torch.cuda.empty_cache()
+        self.reserve_active_cache(request_cache_bytes)
         lookup_started = time.perf_counter()
         prefix_hit = self.prefix_cache.longest_prefix(input_ids)
         prefix_lookup_seconds = time.perf_counter() - lookup_started
@@ -119,11 +161,14 @@ class Generator:
         )
         prefix_hit = None
         store_started = time.perf_counter()
-        stored_blocks = self.prefix_cache.store_completed_blocks(
-            input_ids,
-            decoded.cache,
-            reserved_memory_bytes=request_cache_bytes,
-        )
+        try:
+            stored_blocks = self.prefix_cache.store_completed_blocks(
+                input_ids,
+                decoded.cache,
+                reserved_memory_bytes=request_cache_bytes,
+            )
+        finally:
+            self.decoder.release_cache(decoded.cache)
         store_seconds = time.perf_counter() - store_started
         logger.info(
             "prefix_cache_store request_id=%s stored_blocks=%d occupied_blocks=%d store_ms=%.1f",

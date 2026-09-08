@@ -7,6 +7,7 @@ import torch
 from helios.runtime.prefix_cache import PrefixCacheHit
 from helios.runtime.qwen3.cache import BatchedKVCache, KVCache
 from helios.runtime.qwen3.model import Qwen3Model
+from helios.runtime.qwen3.paged_cache import KVPagePool, PagedBatchCache, PagedKVCache
 from helios.runtime.types import Sampling
 
 logger = logging.getLogger("uvicorn.error")
@@ -21,12 +22,12 @@ class DecodeResult:
     inter_token_seconds: list[float]
     restore_seconds: float
     restored_tokens: int
-    cache: KVCache
+    cache: KVCache | PagedKVCache
 
 
 @dataclass
 class PrefillResult:
-    cache: KVCache
+    cache: KVCache | PagedKVCache
     logits: torch.Tensor
     prefill_seconds: float
     restore_seconds: float
@@ -43,6 +44,7 @@ class DecodedTokens:
 class Decoder:
     def __init__(self, model: Qwen3Model, *, torch_compile: bool = False) -> None:
         self.model = model
+        self.page_pool: KVPagePool | None = None
         self._slot_forward = model
         self._forward = (
             torch.compile(
@@ -71,7 +73,11 @@ class Decoder:
             max_total_tokens=max_total_tokens,
             prefix_hit=prefix_hit,
         )
-        decoded = self.decode(prefill, eos_token_id, sampling, request_id=request_id)
+        try:
+            decoded = self.decode(prefill, eos_token_id, sampling, request_id=request_id)
+        except Exception:
+            self.release_cache(prefill.cache)
+            raise
         return DecodeResult(
             output_ids=decoded.output_ids,
             finish_reason=decoded.finish_reason,
@@ -96,56 +102,74 @@ class Decoder:
                 f"Request needs {capacity:,} KV-cache tokens, but the profiled "
                 f"limit is {max_total_tokens:,}."
             )
-        cache = KVCache(self.model.config, capacity, device=self.device)
-        cached_blocks = prefix_hit.blocks if prefix_hit is not None else ()
-        if prefix_hit is not None:
-            if any(
-                len(block.tokens) != block.snapshot.length for block in cached_blocks
-            ):
-                raise ValueError(
-                    "Prefix-cache token and KV block lengths do not match."
-                )
-            cached_tokens = tuple(
-                token for block in cached_blocks for token in block.tokens
-            )
-            if len(cached_tokens) > len(input_ids):
-                raise ValueError("Prefix-cache hit is longer than the request prompt.")
-            if tuple(input_ids[: len(cached_tokens)]) != cached_tokens:
-                raise ValueError("Prefix-cache hit does not match the request tokens.")
-            if len(cached_tokens) == len(input_ids):
-                cached_blocks = cached_blocks[:-1]
-
-        restore_started = time.perf_counter()
-        cache.restore_blocks(tuple(block.snapshot for block in cached_blocks))
-        restore_seconds = time.perf_counter() - restore_started
-        restored_tokens = cache.length
-        token_tensor = torch.tensor(
-            input_ids[cache.length :], device=self.device
-        ).unsqueeze(0)
-        self.model.eval()
-        with torch.inference_mode():
-            self._synchronize()
-            started = time.perf_counter()
-            forward_logits = self._forward(token_tensor, cache=cache)
-            self._validate_forward_shapes(token_tensor, forward_logits)
-            self._synchronize()
-            prefill_seconds = time.perf_counter() - started
-        return PrefillResult(
-            cache=cache,
-            logits=forward_logits[:, -1, :],
-            prefill_seconds=prefill_seconds,
-            restore_seconds=restore_seconds,
-            restored_tokens=restored_tokens,
+        cache = (
+            PagedKVCache(self.page_pool, capacity)
+            if self.page_pool is not None
+            else KVCache(self.model.config, capacity, device=self.device)
         )
+        try:
+            cached_blocks = prefix_hit.blocks if prefix_hit is not None else ()
+            if prefix_hit is not None:
+                if any(
+                    len(block.tokens) != block.snapshot.length for block in cached_blocks
+                ):
+                    raise ValueError(
+                        "Prefix-cache token and KV block lengths do not match."
+                    )
+                cached_tokens = tuple(
+                    token for block in cached_blocks for token in block.tokens
+                )
+                if len(cached_tokens) > len(input_ids):
+                    raise ValueError("Prefix-cache hit is longer than the request prompt.")
+                if tuple(input_ids[: len(cached_tokens)]) != cached_tokens:
+                    raise ValueError("Prefix-cache hit does not match the request tokens.")
+                if len(cached_tokens) == len(input_ids):
+                    cached_blocks = cached_blocks[:-1]
+
+            restore_started = time.perf_counter()
+            cache.restore_blocks(tuple(block.snapshot for block in cached_blocks))
+            restore_seconds = time.perf_counter() - restore_started
+            restored_tokens = cache.length
+            token_tensor = torch.tensor(
+                input_ids[cache.length :], device=self.device
+            ).unsqueeze(0)
+            self.model.eval()
+            with torch.inference_mode():
+                self._synchronize()
+                started = time.perf_counter()
+                forward_logits = self._forward_cache(token_tensor, cache)
+                self._validate_forward_shapes(token_tensor, forward_logits)
+                self._synchronize()
+                prefill_seconds = time.perf_counter() - started
+            return PrefillResult(
+                cache=cache,
+                logits=forward_logits[:, -1, :],
+                prefill_seconds=prefill_seconds,
+                restore_seconds=restore_seconds,
+                restored_tokens=restored_tokens,
+            )
+        except Exception:
+            self.release_cache(cache)
+            raise
 
     def decode_caches(
-        self, caches: list[KVCache], token_ids: list[int]
+        self, caches: list[KVCache | PagedKVCache], token_ids: list[int]
     ) -> torch.Tensor:
         if not caches or len(caches) != len(token_ids):
             raise ValueError("Every request cache needs exactly one pending token.")
         tokens = torch.tensor(token_ids, dtype=torch.long, device=self.device).unsqueeze(1)
         self.model.eval()
         with torch.inference_mode():
+            if isinstance(caches[0], PagedKVCache):
+                cache = PagedBatchCache(caches)
+                cache.prepare(1)
+                slots = tuple(range(len(caches)))
+                return self.model(
+                    tokens,
+                    cache=cache,
+                    position_ids=cache.slot_lengths(slots).unsqueeze(1),
+                    cache_slots=slots,
+                )[:, -1, :]
             if len(caches) == 1:
                 return self._forward(tokens, cache=caches[0])[:, -1, :]
 
@@ -202,7 +226,7 @@ class Decoder:
                 if index + 1 < sampling.max_new_tokens:
                     self._synchronize()
                     started = time.perf_counter()
-                    forward_logits = self._forward(next_token, cache=cache)
+                    forward_logits = self._forward_cache(next_token, cache)
                     self._validate_forward_shapes(next_token, forward_logits)
                     self._synchronize()
                     inter_token_seconds.append(time.perf_counter() - started)
@@ -216,6 +240,20 @@ class Decoder:
     @property
     def device(self) -> torch.device:
         return next(self.model.parameters()).device
+
+    def _forward_cache(
+        self, tokens: torch.Tensor, cache: KVCache | PagedKVCache
+    ) -> torch.Tensor:
+        if isinstance(cache, PagedKVCache):
+            batch = PagedBatchCache([cache])
+            batch.prepare(tokens.shape[1])
+            return self.model(tokens, cache=batch)
+        return self._forward(tokens, cache=cache)
+
+    @staticmethod
+    def release_cache(cache: KVCache | PagedKVCache) -> None:
+        if isinstance(cache, PagedKVCache):
+            cache.close()
 
     def _synchronize(self) -> None:
         if self.device.type == "cuda":
