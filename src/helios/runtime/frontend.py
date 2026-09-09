@@ -74,6 +74,7 @@ class TextGenerator:
         self.tokenizer = tokenizer
         self.engine = engine
         self._warmed = False
+        self._decode_warmup_batch_sizes: tuple[int, ...] = ()
         if (
             tokenizer.model_id != engine.model_id
             or tokenizer.model_revision != engine.model_revision
@@ -174,9 +175,9 @@ class TextGenerator:
                 ),
                 request_id,
             )
-            if not 2 <= len(result.output_ids) <= COMPILE_WARMUP_OUTPUT_TOKENS:
+            if not 0 <= len(result.output_ids) <= COMPILE_WARMUP_OUTPUT_TOKENS:
                 raise RuntimeError(
-                    "Compile warmup must generate between 2 and "
+                    "Warmup must generate between 0 and "
                     f"{COMPILE_WARMUP_OUTPUT_TOKENS} tokens; generated "
                     f"{len(result.output_ids)}."
                 )
@@ -194,6 +195,12 @@ class TextGenerator:
                 )
             del result
             cache.clear()
+            decode_activation_bytes = 0
+            decode_batch_sizes = ()
+            if self.engine.torch_compile:
+                decode_activation_bytes, decode_batch_sizes = self.engine.warm_decode(
+                    input_ids
+                )
             torch.cuda.synchronize(device)
             torch.cuda.empty_cache()
             baseline = torch.cuda.memory_reserved(device)
@@ -211,9 +218,12 @@ class TextGenerator:
         if self.engine.generator.paged_attention:
             warmup_kv_bytes = 0
         self.engine.update_cache_capacity(
-            warmup_peak_bytes=warmup_peak_bytes,
+            warmup_peak_bytes=max(
+                warmup_peak_bytes, decode_activation_bytes + warmup_kv_bytes
+            ),
             warmup_kv_bytes=warmup_kv_bytes,
         )
+        self._decode_warmup_batch_sizes = decode_batch_sizes
         self._warmed = True
 
     @property
@@ -241,6 +251,8 @@ class TextGenerator:
             "model_revision": self.engine.model_revision,
             "torch_compile": {
                 "enabled": self.engine.torch_compile,
+                "scope": "decode",
+                "warmup_batch_sizes": list(self._decode_warmup_batch_sizes),
                 "warmed": self._warmed and self.engine.torch_compile,
             },
             "memory": self.engine.report.as_dict(),

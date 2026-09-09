@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.nn.attention.bias import causal_lower_right
 
-from helios.runtime.qwen3.cache import BatchedKVCache, KVCache
+from helios.runtime.qwen3.cache import BatchedKVCache, DecodeKVCache, KVCache
 from helios.runtime.qwen3.config import Qwen3Config
 from helios.runtime.qwen3.layers import RMSNorm, TransformerBlock, rope_parameters
 from helios.runtime.qwen3.paged_cache import PagedBatchCache
@@ -42,6 +42,8 @@ class Qwen3Model(nn.Module):
         tokens = input_ids.shape[1]
         if cache is None:
             raise ValueError("Cache slots require a KV cache.")
+        if isinstance(cache, KVCache):
+            raise TypeError("Single-request KV caches do not accept cache slots.")
         cache_slots = cache.slot_ids(cache_slots)
         slot_starts = tuple(cache.slot_length(slot) for slot in cache_slots)
         if max(start + tokens for start in slot_starts) > self.config.context_length:
@@ -83,6 +85,27 @@ class Qwen3Model(nn.Module):
         if cache is not None:
             cache.advance(tokens, slots=cache_slots)
         x = x[:, -1:, :]
+        return self.output(self.final_norm(x).to(self.config.dtype))
+
+    def decode_forward(
+        self,
+        input_ids: torch.Tensor,
+        layers: tuple[tuple[torch.Tensor, torch.Tensor], ...],
+        position_ids: torch.Tensor,
+        mask: torch.Tensor | None,
+    ) -> torch.Tensor:
+        cache = DecodeKVCache(layers, position_ids)
+        x = self.token_embedding(input_ids)
+        for index, block in enumerate(self.blocks):
+            x = block(
+                x,
+                mask,
+                self.cos,
+                self.sin,
+                cache=cache,
+                layer_index=index,
+                position_ids=position_ids,
+            )
         return self.output(self.final_norm(x).to(self.config.dtype))
 
     def _forward_uniform_cache(

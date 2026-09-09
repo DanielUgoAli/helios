@@ -150,7 +150,7 @@ reserves the request's maximum length, rounded up to whole pages, to guarantee
 space for decode. Evicting prefix entries frees pages within the pool rather
 than returning its backing memory to CUDA.
 
-Paging is off by default, and whole-model `torch.compile` is currently unavailable
+Paging is off by default, and decode-only `torch.compile` is currently unavailable
 in this mode. CUDA numerical tests are included but require a compatible GPU;
 CPU checks exercise a reference attention implementation, not the CUDA kernel.
 
@@ -182,9 +182,20 @@ flowchart TD
 At startup, Helios resolves one Hugging Face snapshot for both tokenizer and
 model, checks available GPU memory, loads the safetensors into the native Qwen3
 implementation, and creates a provisional KV limit. A cold/prefix warmup covers
-the main execution paths and optional compiled graphs. Helios then measures the
-warmed cold path and sets one shared memory budget for active request KV and
-retained prefix KV.
+the eager prefill and prefix restoration paths. With compilation enabled, startup
+also runs fixed decode steps through the serving decode entrypoint for every batch
+size from 1 through `HELIOS_MAX_BATCH_SIZE`, using equal and mixed prompt lengths
+and fresh request caches. Warmup fails if the provisional KV budget cannot fit
+these small batches; reduce the maximum batch size in that case. Sampling and
+scheduler bookkeeping remain outside compilation, and early EOS cannot skip the
+decode warmup. Health reports `torch_compile.scope` and `warmup_batch_sizes`.
+
+Helios measures the warmed cold path and batched decode activation peak after
+compilation, then sets one shared memory budget for active request KV and retained
+prefix KV. Compiled dense batches use temporary packed K/V tensors for all layers;
+this extra workspace is included in startup profiling. New shapes can still cause
+compilation during serving; warmup does not cover every possible context length.
+Use `TORCH_LOGS=recompiles,graph_breaks` to inspect graph reuse on the target GPU.
 
 For a single request, the tokenizer applies the Qwen3 chat template. Helios
 hashes complete prompt blocks, restores the longest cached chain of per-layer
@@ -223,7 +234,7 @@ Helios loads a local `.env` file automatically.
 | `HELIOS_MODEL_ID` | `Qwen/Qwen3-4B` | Model repository. No other architecture is currently implemented. |
 | `HELIOS_MODEL_REVISION` | latest resolved snapshot | Pins tokenizer and model files to a Hugging Face revision. |
 | `HF_TOKEN` / `HF_API_KEY` | unset | Hugging Face authentication. |
-| `HELIOS_TORCH_COMPILE` | `0` | Set to `1`, `true`, or `yes` to compile the model with dynamic shapes. |
+| `HELIOS_TORCH_COMPILE` | `0` | Set to `1`, `true`, or `yes` to compile dense single-request and batched decode with Inductor (`dynamic=True`, `fullgraph=True`, `mode="default"`); prefill stays eager. |
 | `HELIOS_PAGED_ATTENTION` | `0` | Use native paged attention and shared 256-token KV/prefix pages; requires `HELIOS_TORCH_COMPILE=0`. |
 | `HELIOS_MAX_GPU_UTILIZATION` | `0.90` | Fraction of total GPU memory available to model residency, activation reserve, and KV state. |
 | `HELIOS_WEIGHT_HEADROOM_RATIO` | `0.20` | Additional free-memory requirement before loading weights. |

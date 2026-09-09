@@ -131,6 +131,21 @@ class Engine:
             request_id=request_id,
         ).result()
 
+    def warm_decode(self, input_ids: list[int]) -> tuple[int, tuple[int, ...]]:
+        from helios.runtime.warmup import warm_decode
+
+        with self._generation_lock:
+            if self._active_requests:
+                raise RuntimeError("Cannot warm decode while requests are active.")
+            capacity = self.generator.cache
+            return warm_decode(
+                self.generator.decoder,
+                input_ids,
+                max_batch_size=self._max_batch_size,
+                max_tokens=capacity.max_tokens,
+                budget_tokens=capacity.kv_budget_bytes // capacity.bytes_per_token,
+            )
+
     def run_warmup(
         self,
         input_ids: list[int],

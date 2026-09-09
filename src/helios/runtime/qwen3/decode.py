@@ -45,16 +45,16 @@ class Decoder:
     def __init__(self, model: Qwen3Model, *, torch_compile: bool = False) -> None:
         self.model = model
         self.page_pool: KVPagePool | None = None
-        self._slot_forward = model
-        self._forward = (
+        self._compiled_decode = (
             torch.compile(
-                model,
+                model.decode_forward,
+                backend="inductor",
                 dynamic=True,
                 fullgraph=True,
                 mode="default",
             )
             if torch_compile
-            else model
+            else None
         )
 
     def generate(
@@ -74,7 +74,9 @@ class Decoder:
             prefix_hit=prefix_hit,
         )
         try:
-            decoded = self.decode(prefill, eos_token_id, sampling, request_id=request_id)
+            decoded = self.decode(
+                prefill, eos_token_id, sampling, request_id=request_id
+            )
         except Exception:
             self.release_cache(prefill.cache)
             raise
@@ -111,7 +113,8 @@ class Decoder:
             cached_blocks = prefix_hit.blocks if prefix_hit is not None else ()
             if prefix_hit is not None:
                 if any(
-                    len(block.tokens) != block.snapshot.length for block in cached_blocks
+                    len(block.tokens) != block.snapshot.length
+                    for block in cached_blocks
                 ):
                     raise ValueError(
                         "Prefix-cache token and KV block lengths do not match."
@@ -120,9 +123,13 @@ class Decoder:
                     token for block in cached_blocks for token in block.tokens
                 )
                 if len(cached_tokens) > len(input_ids):
-                    raise ValueError("Prefix-cache hit is longer than the request prompt.")
+                    raise ValueError(
+                        "Prefix-cache hit is longer than the request prompt."
+                    )
                 if tuple(input_ids[: len(cached_tokens)]) != cached_tokens:
-                    raise ValueError("Prefix-cache hit does not match the request tokens.")
+                    raise ValueError(
+                        "Prefix-cache hit does not match the request tokens."
+                    )
                 if len(cached_tokens) == len(input_ids):
                     cached_blocks = cached_blocks[:-1]
 
@@ -157,7 +164,9 @@ class Decoder:
     ) -> torch.Tensor:
         if not caches or len(caches) != len(token_ids):
             raise ValueError("Every request cache needs exactly one pending token.")
-        tokens = torch.tensor(token_ids, dtype=torch.long, device=self.device).unsqueeze(1)
+        tokens = torch.tensor(
+            token_ids, dtype=torch.long, device=self.device
+        ).unsqueeze(1)
         self.model.eval()
         with torch.inference_mode():
             if isinstance(caches[0], PagedKVCache):
@@ -170,18 +179,64 @@ class Decoder:
                     position_ids=cache.slot_lengths(slots).unsqueeze(1),
                     cache_slots=slots,
                 )[:, -1, :]
+            if self._compiled_decode is not None:
+                return self._decode_dense(tokens, caches)[:, -1, :]
             if len(caches) == 1:
-                return self._forward(tokens, cache=caches[0])[:, -1, :]
+                return self.model(tokens, cache=caches[0])[:, -1, :]
 
             cache = BatchedKVCache(caches)
             slots = list(range(len(caches)))
             positions = cache.slot_lengths(slots).unsqueeze(1)
-            return self._slot_forward(
+            return self.model(
                 tokens,
                 cache=cache,
                 position_ids=positions,
                 cache_slots=slots,
             )[:, -1, :]
+
+    def _decode_dense(
+        self, tokens: torch.Tensor, caches: list[KVCache]
+    ) -> torch.Tensor:
+        BatchedKVCache(caches)
+        lengths = [cache.length for cache in caches]
+        if any(
+            length >= cache.capacity
+            for length, cache in zip(lengths, caches, strict=True)
+        ):
+            raise ValueError("Decode would exceed request KV capacity.")
+        key_length = max(lengths) + 1
+        positions = torch.tensor(lengths, device=self.device).unsqueeze(1)
+        layers = []
+        for layer_index in range(self.model.config.n_layers):
+            if len(caches) == 1:
+                entry = caches[0]._layers[layer_index]
+                layers.append(
+                    (entry.keys[:, :, :key_length], entry.values[:, :, :key_length])
+                )
+                continue
+            reference = caches[0]._layers[layer_index].keys
+            keys = reference.new_zeros(
+                len(caches), reference.shape[1], key_length, reference.shape[3]
+            )
+            values = torch.zeros_like(keys)
+            for row, cache in enumerate(caches):
+                entry = cache._layers[layer_index]
+                keys[row, :, : cache.length].copy_(entry.keys[0, :, : cache.length])
+                values[row, :, : cache.length].copy_(entry.values[0, :, : cache.length])
+            layers.append((keys, values))
+        mask = None
+        if len(set(lengths)) > 1:
+            mask = (torch.arange(key_length, device=self.device)[None, :] <= positions)[
+                :, None, None, :
+            ]
+        logits = self._compiled_decode(tokens, tuple(layers), positions, mask)
+        for row, cache in enumerate(caches):
+            if len(caches) > 1:
+                for entry, (keys, values) in zip(cache._layers, layers, strict=True):
+                    entry.keys[0, :, cache.length].copy_(keys[row, :, cache.length])
+                    entry.values[0, :, cache.length].copy_(values[row, :, cache.length])
+            cache.advance(1)
+        return logits
 
     def decode(
         self,
@@ -226,7 +281,9 @@ class Decoder:
                 if index + 1 < sampling.max_new_tokens:
                     self._synchronize()
                     started = time.perf_counter()
-                    forward_logits = self._forward_cache(next_token, cache)
+                    forward_logits = self.decode_caches([cache], [token_id]).unsqueeze(
+                        1
+                    )
                     self._validate_forward_shapes(next_token, forward_logits)
                     self._synchronize()
                     inter_token_seconds.append(time.perf_counter() - started)
@@ -248,7 +305,7 @@ class Decoder:
             batch = PagedBatchCache([cache])
             batch.prepare(tokens.shape[1])
             return self.model(tokens, cache=batch)
-        return self._forward(tokens, cache=cache)
+        return self.model(tokens, cache=cache)
 
     @staticmethod
     def release_cache(cache: KVCache | PagedKVCache) -> None:

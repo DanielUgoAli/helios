@@ -208,8 +208,7 @@ class BatchedKVCache:
                 for layer in cache._layers
             )
             if (
-                cache.batch_size != 1
-                or cache._device != reference._device
+                cache._device != reference._device
                 or layers != reference_layers
             ):
                 raise ValueError(
@@ -285,3 +284,27 @@ class BatchedKVCache:
             raise ValueError("Batched KV cache requires request row indexes.")
         for row in self.slot_ids(slots):
             self._caches[row].advance(tokens)
+
+
+class DecodeKVCache:
+    def __init__(
+        self,
+        layers: tuple[tuple[torch.Tensor, torch.Tensor], ...],
+        positions: torch.Tensor,
+    ) -> None:
+        self.layers = layers
+        self.positions = positions
+
+    def append(
+        self,
+        layer: int,
+        keys: torch.Tensor,
+        values: torch.Tensor,
+        *,
+        slots: Sequence[int] | torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        stored_keys, stored_values = self.layers[layer]
+        indices = self.positions[:, None, :, None].expand_as(keys)
+        stored_keys.scatter_(2, indices, keys)
+        stored_values.scatter_(2, indices, values)
+        return stored_keys, stored_values
