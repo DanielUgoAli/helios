@@ -232,7 +232,8 @@ class PrefixCache:
         now = self._clock()
         self._purge_expired(now)
         completed_length = len(token_ids) // self.block_size * self.block_size
-        if completed_length > cache.slot_length(slot):
+        cache_length = cache.length if isinstance(cache, KVCache) else cache.slot_length(slot)
+        if completed_length > cache_length:
             raise ValueError("KV cache has not processed every completed token block.")
 
         blocks = build_token_blocks(token_ids[:completed_length], self.block_size)
@@ -241,7 +242,7 @@ class PrefixCache:
             available_bytes -= reserved_memory_bytes
             if available_bytes < 0:
                 raise ValueError("Reserved memory must fit within the KV-cache budget.")
-        snapshot_bytes = cache.memory_bytes_per_slot_token * self.block_size
+        snapshot_bytes = cache.memory_bytes_per_token * self.block_size
         if available_bytes is not None and snapshot_bytes > available_bytes:
             return 0
 
@@ -261,7 +262,11 @@ class PrefixCache:
             if block.parent_hash and block.parent_hash not in self._blocks:
                 break
             start = index * self.block_size
-            snapshot = cache.snapshot_block_slot(slot, start, start + self.block_size)
+            snapshot = (
+                cache.snapshot_block(start, start + self.block_size)
+                if isinstance(cache, KVCache)
+                else cache.snapshot_block_slot(slot, start, start + self.block_size)
+            )
             self._blocks[block.hash] = CachedBlock(
                 tokens=block.tokens,
                 snapshot=snapshot,
