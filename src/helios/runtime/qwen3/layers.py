@@ -7,7 +7,7 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from helios.runtime.qwen3.cache import BatchedKVCache, DecodeKVCache, KVCache
 from helios.runtime.qwen3.config import Qwen3Config
-from helios.runtime.qwen3.paged_cache import PagedBatchCache
+from helios.runtime.qwen3.paged_cache import PagedBatchCache, PagedDecodeCache
 
 
 class FeedForward(nn.Module):
@@ -119,7 +119,12 @@ class GroupedQueryAttention(nn.Module):
         *,
         is_causal: bool = False,
         start_pos: int = 0,
-        cache: KVCache | BatchedKVCache | DecodeKVCache | PagedBatchCache | None = None,
+        cache: KVCache
+        | BatchedKVCache
+        | DecodeKVCache
+        | PagedBatchCache
+        | PagedDecodeCache
+        | None = None,
         layer_index: int = 0,
         position_ids: torch.Tensor | None = None,
         cache_slots: Sequence[int] | torch.Tensor | None = None,
@@ -154,7 +159,7 @@ class GroupedQueryAttention(nn.Module):
             start_pos=start_pos,
             position_ids=position_ids,
         )
-        if isinstance(cache, PagedBatchCache):
+        if isinstance(cache, (PagedBatchCache, PagedDecodeCache)):
             context = cache.attend(layer_index, queries, keys, values)
             context = context.transpose(1, 2).reshape(batch_size, tokens, -1)
             return self.output(context)
@@ -204,7 +209,12 @@ class TransformerBlock(nn.Module):
         *,
         is_causal: bool = False,
         start_pos: int = 0,
-        cache: KVCache | BatchedKVCache | DecodeKVCache | PagedBatchCache | None = None,
+        cache: KVCache
+        | BatchedKVCache
+        | DecodeKVCache
+        | PagedBatchCache
+        | PagedDecodeCache
+        | None = None,
         layer_index: int = 0,
         position_ids: torch.Tensor | None = None,
         cache_slots: Sequence[int] | torch.Tensor | None = None,

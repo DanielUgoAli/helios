@@ -39,6 +39,10 @@ def warm_decode(
     for measured in (False, True):
         for batch_size in batch_sizes:
             capacity = min(max_tokens, budget_tokens // batch_size)
+            if decoder.page_pool is not None:
+                page_size = decoder.page_pool.page_size
+                pages = min(budget_tokens // page_size, decoder.page_pool.free_pages)
+                capacity = min(capacity, pages // batch_size * page_size)
             prompt_limit = min(len(input_ids), capacity - DECODE_WARMUP_STEPS)
             if prompt_limit < 4:
                 raise RuntimeError(
@@ -73,6 +77,8 @@ def warm_decode(
                             cache.capacity * cache.memory_bytes_per_token
                             for cache in caches
                         )
+                        if decoder.page_pool is not None:
+                            kv_bytes = 0
                         peak = torch.cuda.max_memory_reserved(device) - baseline
                         activation_peak = max(activation_peak, peak - kv_bytes)
                 finally:

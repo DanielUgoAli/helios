@@ -134,7 +134,7 @@ repeated decode step where it matters most.
 Enable the optional native PyTorch paged-attention path with:
 
 ```bash
-HELIOS_PAGED_ATTENTION=1 HELIOS_TORCH_COMPILE=0 uv run helios
+HELIOS_PAGED_ATTENTION=1 HELIOS_TORCH_COMPILE=1 uv run helios
 ```
 
 This requires PyTorch 2.13 and an Ampere or newer NVIDIA GPU (SM80+) with
@@ -150,8 +150,9 @@ reserves the request's maximum length, rounded up to whole pages, to guarantee
 space for decode. Evicting prefix entries frees pages within the pool rather
 than returning its backing memory to CUDA.
 
-Paging is off by default, and decode-only `torch.compile` is currently unavailable
-in this mode. CUDA numerical tests are included but require a compatible GPU;
+Paging is off by default and supports decode-only `torch.compile`. Page allocation
+and request bookkeeping stay eager; compiled decode writes directly to the shared
+KV pool and calls native paged attention. Prefill stays eager. CUDA numerical tests are included but require a compatible GPU;
 CPU checks exercise a reference attention implementation, not the CUDA kernel.
 
 ## Architecture
@@ -234,8 +235,8 @@ Helios loads a local `.env` file automatically.
 | `HELIOS_MODEL_ID` | `Qwen/Qwen3-4B` | Model repository. No other architecture is currently implemented. |
 | `HELIOS_MODEL_REVISION` | latest resolved snapshot | Pins tokenizer and model files to a Hugging Face revision. |
 | `HF_TOKEN` / `HF_API_KEY` | unset | Hugging Face authentication. |
-| `HELIOS_TORCH_COMPILE` | `0` | Set to `1`, `true`, or `yes` to compile dense single-request and batched decode with Inductor (`dynamic=True`, `fullgraph=True`, `mode="default"`); prefill stays eager. |
-| `HELIOS_PAGED_ATTENTION` | `0` | Use native paged attention and shared 256-token KV/prefix pages; requires `HELIOS_TORCH_COMPILE=0`. |
+| `HELIOS_TORCH_COMPILE` | `0` | Set to `1`, `true`, or `yes` to compile dense or paged single-request and batched decode with Inductor (`dynamic=True`, `fullgraph=True`, `mode="default"`); prefill stays eager. |
+| `HELIOS_PAGED_ATTENTION` | `0` | Use native paged attention and shared 256-token KV/prefix pages; compatible with `HELIOS_TORCH_COMPILE=1`. |
 | `HELIOS_MAX_GPU_UTILIZATION` | `0.90` | Fraction of total GPU memory available to model residency, activation reserve, and KV state. |
 | `HELIOS_WEIGHT_HEADROOM_RATIO` | `0.20` | Additional free-memory requirement before loading weights. |
 | `HELIOS_KV_CACHE_HEADROOM_RATIO` | `0.20` | Safety margin above measured warmup activation memory. |

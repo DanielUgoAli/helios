@@ -21,8 +21,6 @@ class HeliosConfig:
     batch_wait_ms: float = 2.0
 
     def __post_init__(self) -> None:
-        if self.paged_attention and self.torch_compile:
-            raise ValueError("Paged attention currently requires HELIOS_TORCH_COMPILE=0.")
         if (
             not math.isfinite(self.max_gpu_utilization)
             or not 0 < self.max_gpu_utilization <= 1

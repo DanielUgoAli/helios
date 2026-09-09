@@ -319,6 +319,77 @@ class PagedBatchCache:
         )
 
 
+class PagedDecodeCache:
+    def __init__(self, batch: PagedBatchCache) -> None:
+        self.keys = batch.pool.keys
+        self.values = batch.pool.values
+        self.block_table = batch.block_table
+        self.seqused_k = batch.seqused_k
+        self.cu_seq_q = batch.cu_seq_q
+        self.cu_seq_k = batch.cu_seq_k
+        self.write_slots = batch.write_slots
+
+    def attend(
+        self,
+        layer: int,
+        queries: torch.Tensor,
+        keys: torch.Tensor,
+        values: torch.Tensor,
+    ) -> torch.Tensor:
+        key_pool, value_pool = self.keys[layer], self.values[layer]
+        kv_heads, head_dim = keys.shape[1], keys.shape[3]
+        key_pool.view(-1, kv_heads, head_dim).index_copy_(
+            0, self.write_slots, keys.transpose(1, 2).reshape(-1, kv_heads, head_dim)
+        )
+        value_pool.view(-1, kv_heads, head_dim).index_copy_(
+            0, self.write_slots, values.transpose(1, 2).reshape(-1, kv_heads, head_dim)
+        )
+        batch_size = queries.shape[0]
+        max_k = self.block_table.shape[1] * key_pool.shape[1]
+        if queries.is_cuda:
+            output = varlen_attn(
+                queries.squeeze(2),
+                key_pool,
+                value_pool,
+                self.cu_seq_q,
+                self.cu_seq_k,
+                1,
+                max_k,
+                window_size=(-1, 0),
+                enable_gqa=queries.shape[1] > kv_heads,
+                seqused_k=self.seqused_k,
+                block_table=self.block_table,
+                num_splits=1,
+            )
+            return output.unsqueeze(2)
+        indices = self.block_table.long().reshape(-1)
+        mask = (
+            torch.arange(max_k, device=queries.device)[None, :]
+            < self.seqused_k[:, None]
+        )
+        dense_keys = (
+            key_pool.index_select(0, indices)
+            .reshape(batch_size, max_k, kv_heads, head_dim)
+            .transpose(1, 2)
+        )
+        dense_values = (
+            value_pool.index_select(0, indices)
+            .reshape(batch_size, max_k, kv_heads, head_dim)
+            .transpose(1, 2)
+        )
+        mask = mask[:, None, None, :]
+        dense_keys = dense_keys.masked_fill(~mask.transpose(2, 3), 0)
+        dense_values = dense_values.masked_fill(~mask.transpose(2, 3), 0)
+        return torch.nn.functional.scaled_dot_product_attention(
+            queries,
+            dense_keys,
+            dense_values,
+            attn_mask=mask,
+            dropout_p=0.0,
+            enable_gqa=queries.shape[1] > kv_heads,
+        )
+
+
 def _pages_for(tokens: int, page_size: int) -> int:
     return (tokens + page_size - 1) // page_size
 

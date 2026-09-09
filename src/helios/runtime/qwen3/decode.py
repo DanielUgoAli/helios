@@ -7,7 +7,12 @@ import torch
 from helios.runtime.prefix_cache import PrefixCacheHit
 from helios.runtime.qwen3.cache import BatchedKVCache, KVCache
 from helios.runtime.qwen3.model import Qwen3Model
-from helios.runtime.qwen3.paged_cache import KVPagePool, PagedBatchCache, PagedKVCache
+from helios.runtime.qwen3.paged_cache import (
+    KVPagePool,
+    PagedBatchCache,
+    PagedDecodeCache,
+    PagedKVCache,
+)
 from helios.runtime.types import Sampling
 
 logger = logging.getLogger("uvicorn.error")
@@ -48,6 +53,18 @@ class Decoder:
         self._compiled_decode = (
             torch.compile(
                 model.decode_forward,
+                backend="inductor",
+                dynamic=True,
+                fullgraph=True,
+                mode="default",
+            )
+            if torch_compile
+            else None
+        )
+
+        self._compiled_paged_decode = (
+            torch.compile(
+                model.paged_decode_forward,
                 backend="inductor",
                 dynamic=True,
                 fullgraph=True,
@@ -173,6 +190,14 @@ class Decoder:
                 cache = PagedBatchCache(caches)
                 cache.prepare(1)
                 slots = tuple(range(len(caches)))
+                if self._compiled_paged_decode is not None:
+                    logits = self._compiled_paged_decode(
+                        tokens,
+                        PagedDecodeCache(cache),
+                        cache.slot_lengths(slots).unsqueeze(1),
+                    )
+                    cache.advance(1)
+                    return logits[:, -1, :]
                 return self.model(
                     tokens,
                     cache=cache,

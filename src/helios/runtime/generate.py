@@ -59,8 +59,6 @@ class Generator:
         prefix_cache_ttl_seconds: float = 300.0,
         paged_attention: bool = False,
     ) -> None:
-        if paged_attention and torch_compile:
-            raise ValueError("Paged attention currently requires torch_compile=False.")
         self.decoder = Decoder(model, torch_compile=torch_compile)
         self.cache = cache
         self.paged_attention = paged_attention

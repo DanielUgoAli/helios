@@ -7,7 +7,7 @@ from torch.nn.attention.bias import causal_lower_right
 from helios.runtime.qwen3.cache import BatchedKVCache, DecodeKVCache, KVCache
 from helios.runtime.qwen3.config import Qwen3Config
 from helios.runtime.qwen3.layers import RMSNorm, TransformerBlock, rope_parameters
-from helios.runtime.qwen3.paged_cache import PagedBatchCache
+from helios.runtime.qwen3.paged_cache import PagedBatchCache, PagedDecodeCache
 
 
 class Qwen3Model(nn.Module):
@@ -95,6 +95,23 @@ class Qwen3Model(nn.Module):
         mask: torch.Tensor | None,
     ) -> torch.Tensor:
         cache = DecodeKVCache(layers, position_ids)
+        return self._decode_forward(input_ids, cache, position_ids, mask)
+
+    def paged_decode_forward(
+        self,
+        input_ids: torch.Tensor,
+        cache: PagedDecodeCache,
+        position_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        return self._decode_forward(input_ids, cache, position_ids, None)
+
+    def _decode_forward(
+        self,
+        input_ids: torch.Tensor,
+        cache: DecodeKVCache | PagedDecodeCache,
+        position_ids: torch.Tensor,
+        mask: torch.Tensor | None,
+    ) -> torch.Tensor:
         x = self.token_embedding(input_ids)
         for index, block in enumerate(self.blocks):
             x = block(
