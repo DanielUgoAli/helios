@@ -1,3 +1,4 @@
+import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -38,6 +39,7 @@ class KVCache:
             )
         self.capacity = capacity
         self.length = 0
+        self._decode_batch: DenseDecodeBatch | None = None
         self._device = device
         self._layers = [
             LayerKV(
@@ -178,6 +180,44 @@ class KVCache:
             or source.values.device != destination.values.device
         ):
             raise ValueError("Snapshot tensor device does not match this KV cache.")
+
+
+class DenseDecodeBatch:
+    def __init__(self, caches: Sequence[KVCache]) -> None:
+        BatchedKVCache(caches)
+        if len({id(cache) for cache in caches}) != len(caches):
+            raise ValueError("Dense decode needs distinct request caches.")
+        self.members = tuple(weakref.ref(cache) for cache in caches)
+        self.capacity = max(cache.capacity for cache in caches)
+        self.token_capacity = len(caches) * self.capacity
+        self.layers = []
+        for layer_index in range(len(caches[0]._layers)):
+            reference = caches[0]._layers[layer_index]
+            if len(caches) == 1 and caches[0]._decode_batch is None:
+                self.layers.append((reference.keys, reference.values))
+                continue
+            keys = reference.keys.new_zeros(
+                len(caches), reference.keys.shape[1], self.capacity,
+                reference.keys.shape[3],
+            )
+            values = torch.zeros_like(keys)
+            for row, cache in enumerate(caches):
+                entry = cache._layers[layer_index]
+                keys[row, :, :cache.length].copy_(entry.keys[0, :, :cache.length])
+                values[row, :, :cache.length].copy_(entry.values[0, :, :cache.length])
+            self.layers.append((keys, values))
+        for row, cache in enumerate(caches):
+            cache._layers = [
+                LayerKV(keys[row:row + 1, :, :cache.capacity],
+                        values[row:row + 1, :, :cache.capacity])
+                for keys, values in self.layers
+            ]
+            cache._decode_batch = self
+
+    def matches(self, caches: Sequence[KVCache]) -> bool:
+        return len(caches) == len(self.members) and all(
+            member() is cache for member, cache in zip(self.members, caches, strict=True)
+        )
 
 class BatchedKVCache:
     def __init__(self, caches: Sequence[KVCache]) -> None:

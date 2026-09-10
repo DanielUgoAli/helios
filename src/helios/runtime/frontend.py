@@ -195,8 +195,9 @@ class TextGenerator:
                 )
             del result
             cache.clear()
-            decode_activation_bytes = 0
-            decode_batch_sizes = ()
+            decode_activation_bytes, decode_batch_sizes = self.engine.warm_decode(
+                input_ids
+            )
             torch.cuda.synchronize(device)
             torch.cuda.empty_cache()
             baseline = torch.cuda.memory_reserved(device)

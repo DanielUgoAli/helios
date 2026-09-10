@@ -38,7 +38,10 @@ def warm_decode(
     activation_peak = 0
     for measured in (False, True):
         for batch_size in batch_sizes:
-            capacity = min(max_tokens, budget_tokens // batch_size)
+            allocation_copies = 2 if decoder.page_pool is None and batch_size > 1 else 1
+            capacity = min(
+                max_tokens, budget_tokens // (batch_size * allocation_copies)
+            )
             if decoder.page_pool is not None:
                 page_size = decoder.page_pool.page_size
                 pages = min(budget_tokens // page_size, decoder.page_pool.free_pages)

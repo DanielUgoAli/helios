@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import torch
 
 from helios.runtime.prefix_cache import PrefixCacheHit
-from helios.runtime.qwen3.cache import BatchedKVCache, KVCache
+from helios.runtime.qwen3.cache import BatchedKVCache, DenseDecodeBatch, KVCache
 from helios.runtime.qwen3.model import Qwen3Model
 from helios.runtime.qwen3.paged_cache import (
     KVPagePool,
@@ -172,18 +172,36 @@ class Decoder:
                     position_ids=cache.slot_lengths(slots).unsqueeze(1),
                     cache_slots=slots,
                 )[:, -1, :]
-            if len(caches) == 1:
-                return self.model(tokens, cache=caches[0])[:, -1, :]
+            return self._decode_dense(tokens, caches)[:, -1, :]
 
-            cache = BatchedKVCache(caches)
-            slots = list(range(len(caches)))
-            positions = cache.slot_lengths(slots).unsqueeze(1)
-            return self.model(
-                tokens,
-                cache=cache,
-                position_ids=positions,
-                cache_slots=slots,
-            )[:, -1, :]
+    def _decode_dense(
+        self, tokens: torch.Tensor, caches: list[KVCache]
+    ) -> torch.Tensor:
+        BatchedKVCache(caches)
+        lengths = [cache.length for cache in caches]
+        if any(
+            length >= cache.capacity
+            for length, cache in zip(lengths, caches, strict=True)
+        ):
+            raise ValueError("Decode would exceed request KV capacity.")
+        key_length = max(lengths) + 1
+        positions = torch.tensor(lengths, device=self.device).unsqueeze(1)
+        batch = caches[0]._decode_batch
+        if batch is None or not batch.matches(caches):
+            batch = DenseDecodeBatch(caches)
+        layers = tuple(
+            (keys[:, :, :key_length], values[:, :, :key_length])
+            for keys, values in batch.layers
+        )
+        mask = None
+        if len(set(lengths)) > 1:
+            mask = (torch.arange(key_length, device=self.device)[None, :] <= positions)[
+                :, None, None, :
+            ]
+        logits = self.model.decode_forward(tokens, layers, positions, mask)
+        for cache in caches:
+            cache.advance(1)
+        return logits
 
     def decode(
         self,
@@ -258,6 +276,34 @@ class Decoder:
     def release_cache(cache: KVCache | PagedKVCache) -> None:
         if isinstance(cache, PagedKVCache):
             cache.close()
+        else:
+            cache._layers.clear()
+            cache._decode_batch = None
+
+    def dense_reservation_bytes(
+        self, caches: list[KVCache], *, extra_capacity: int = 0
+    ) -> int:
+        config = self.model.config
+        bytes_per_token = (
+            2 * config.n_layers * config.n_kv_heads * config.head_dim
+            * torch.empty((), dtype=config.dtype).element_size()
+        )
+        owners = {}
+        for cache in caches:
+            batch = cache._decode_batch
+            owner = batch if batch is not None else cache
+            owners[id(owner)] = batch.token_capacity if batch is not None else cache.capacity
+        allocated = sum(owners.values()) + extra_capacity
+        capacities = [cache.capacity for cache in caches]
+        if extra_capacity:
+            capacities.append(extra_capacity)
+        if not capacities:
+            return 0
+        batch = caches[0]._decode_batch if caches else None
+        reusable = not extra_capacity and batch is not None and batch.matches(caches)
+        fresh_single = len(capacities) == 1 and batch is None
+        rebuild = 0 if reusable or fresh_single else len(capacities) * max(capacities)
+        return (allocated + rebuild) * bytes_per_token
 
     def _synchronize(self) -> None:
         if self.device.type == "cuda":

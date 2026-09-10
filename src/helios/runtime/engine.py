@@ -76,7 +76,9 @@ class Engine:
     ) -> None:
         with self._generation_lock:
             if self._active_requests:
-                raise RuntimeError("Cannot reprofile KV memory while requests are active.")
+                raise RuntimeError(
+                    "Cannot reprofile KV memory while requests are active."
+                )
             if self.generator.paged_attention:
                 self.generator.release_page_pool()
                 torch.cuda.empty_cache()
@@ -443,19 +445,20 @@ class Engine:
         if self.generator.paged_attention:
             return kv_bytes
         count = len(active) + bool(extra_capacity)
+        kv_bytes = self.generator.decoder.dense_reservation_bytes(
+            [item.cache for item in active], extra_capacity=extra_capacity
+        )
         if count < 2:
             return kv_bytes
         capacities = [item.cache.capacity for item in active]
         if extra_capacity:
             capacities.append(extra_capacity)
         model_config = self.generator.decoder.model.config
-        per_layer_bytes = self.generator.cache.bytes_per_token // model_config.n_layers
         max_capacity = max(capacities)
-        batched_kv_bytes = count * max_capacity * per_layer_bytes
         attention_workspace_bytes = (
             count * model_config.n_heads * max_capacity * (1 + 4)
         )
-        return kv_bytes + batched_kv_bytes + attention_workspace_bytes
+        return kv_bytes + attention_workspace_bytes
 
     def _memory_log_fields(self, kv_reserved_bytes: int) -> str:
         cache = self.generator.cache

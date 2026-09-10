@@ -101,6 +101,17 @@ class ContinuousBatchingTests(unittest.TestCase):
                 loader=loader,
             )
         self.addCleanup(engine.close)
+        decode = engine.generator.decoder.decode_caches
+
+        def record_decode(caches, tokens):
+            self.decode_batch_sizes.append(len(tokens))
+            return decode(caches, tokens)
+
+        recorder = patch.object(
+            engine.generator.decoder, "decode_caches", side_effect=record_decode
+        )
+        recorder.start()
+        self.addCleanup(recorder.stop)
         return engine
 
     def enqueue(
@@ -298,7 +309,7 @@ class ContinuousBatchingTests(unittest.TestCase):
         failed = self.enqueue(engine, "failed", [3, 4, 5, 6], 10)
         next_request = self.enqueue(engine, "next", [7, 8, 9, 10], 10)
         self.tick(engine)
-        forward = self.model.forward
+        forward = engine.generator.decoder.decode_caches
         calls = 0
 
         def fail_once(*args, **kwargs):
@@ -308,7 +319,9 @@ class ContinuousBatchingTests(unittest.TestCase):
                 raise RuntimeError("injected decode failure")
             return forward(*args, **kwargs)
 
-        with patch.object(self.model, "forward", side_effect=fail_once):
+        with patch.object(
+            engine.generator.decoder, "decode_caches", side_effect=fail_once
+        ):
             self.tick(engine)
         with self.assertRaisesRegex(RuntimeError, "injected decode failure"):
             failed.result(timeout=0)
