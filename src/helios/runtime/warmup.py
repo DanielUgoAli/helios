@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from helios.runtime.qwen3.decode import Decoder
 
 
-COMPILE_WARMUP_PROMPT = """
+WARMUP_PROMPT = """
 A regional library system has eight branches, a shared catalog, self-checkout kiosks, and a
 mobile app. Patrons report that newly returned books sometimes remain unavailable for several
 minutes, while staff occasionally see the same hold assigned twice during busy evenings. The
@@ -18,7 +18,7 @@ includes data integrity, cache invalidation, observability, rollout safety, and 
 handling. State the tradeoffs and define concrete metrics.
 """.strip()
 
-COMPILE_WARMUP_OUTPUT_TOKENS = 4
+WARMUP_OUTPUT_TOKENS = 4
 
 
 DECODE_WARMUP_STEPS = 4

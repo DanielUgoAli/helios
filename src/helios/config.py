@@ -10,7 +10,6 @@ class HeliosConfig:
     model_id: str
     hf_token: str | None
     model_revision: str | None = None
-    torch_compile: bool = False
     paged_attention: bool = False
     max_gpu_utilization: float = 0.90
     weight_headroom_ratio: float = 0.20
@@ -55,8 +54,6 @@ def get_config() -> HeliosConfig:
         model_id=os.getenv("HELIOS_MODEL_ID", "Qwen/Qwen3-4B"),
         hf_token=os.getenv("HF_TOKEN") or os.getenv("HF_API_KEY"),
         model_revision=os.getenv("HELIOS_MODEL_REVISION") or None,
-        torch_compile=os.getenv("HELIOS_TORCH_COMPILE", "0").lower()
-        not in {"0", "false", "no"},
         paged_attention=os.getenv("HELIOS_PAGED_ATTENTION", "0").lower()
         in {"1", "true", "yes"},
         max_gpu_utilization=float(os.getenv("HELIOS_MAX_GPU_UTILIZATION", "0.90")),

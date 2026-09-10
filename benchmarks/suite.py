@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from helios.runtime.warmup import COMPILE_WARMUP_PROMPT
+from helios.runtime.warmup import WARMUP_PROMPT
 
 SUITE_VERSION = 4
 
@@ -28,7 +28,7 @@ PREFILL_INPUT = "\n\n".join(PREFILL_CONTEXT for _ in range(5)) + (
     "\n\nName the first action only."
 )
 
-BALANCED_INPUT = COMPILE_WARMUP_PROMPT
+BALANCED_INPUT = WARMUP_PROMPT
 
 BALANCED_INPUTS = (
     "Explain how to roll out a database index safely, including how to measure whether it helped.",

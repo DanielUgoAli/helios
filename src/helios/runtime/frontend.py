@@ -8,8 +8,8 @@ from helios.runtime.engine import Engine
 from helios.runtime.generate import GenerationResult
 from helios.runtime.types import Sampling
 from helios.runtime.warmup import (
-    COMPILE_WARMUP_OUTPUT_TOKENS,
-    COMPILE_WARMUP_PROMPT,
+    WARMUP_OUTPUT_TOKENS,
+    WARMUP_PROMPT,
 )
 from helios.runtime.worker import Tokenizer
 
@@ -148,10 +148,10 @@ class TextGenerator:
         if self._warmed:
             return
 
-        prompt = COMPILE_WARMUP_PROMPT
+        prompt = WARMUP_PROMPT
         input_ids = self.tokenizer.tokenize_chat([("user", prompt)])
         while len(input_ids) <= self.engine.generator.prefix_cache.block_size:
-            prompt += "\n\n" + COMPILE_WARMUP_PROMPT
+            prompt += "\n\n" + WARMUP_PROMPT
             input_ids = self.tokenizer.tokenize_chat([("user", prompt)])
         extended_ids = self.tokenizer.tokenize_chat(
             [
@@ -171,14 +171,14 @@ class TextGenerator:
                 Sampling(
                     temperature=0,
                     top_p=1,
-                    max_new_tokens=COMPILE_WARMUP_OUTPUT_TOKENS,
+                    max_new_tokens=WARMUP_OUTPUT_TOKENS,
                 ),
                 request_id,
             )
-            if not 0 <= len(result.output_ids) <= COMPILE_WARMUP_OUTPUT_TOKENS:
+            if not 0 <= len(result.output_ids) <= WARMUP_OUTPUT_TOKENS:
                 raise RuntimeError(
                     "Warmup must generate between 0 and "
-                    f"{COMPILE_WARMUP_OUTPUT_TOKENS} tokens; generated "
+                    f"{WARMUP_OUTPUT_TOKENS} tokens; generated "
                     f"{len(result.output_ids)}."
                 )
             return result
@@ -187,20 +187,16 @@ class TextGenerator:
         device = self.engine.generator.decoder.device
         cache.clear()
         try:
-            run(input_ids, "startup-compile-cold")
-            result = run(extended_ids, "startup-compile-prefix")
+            run(input_ids, "startup-warmup-cold")
+            result = run(extended_ids, "startup-warmup-prefix")
             if not 0 < result.prefix.restored_tokens < len(extended_ids) - 1:
                 raise RuntimeError(
-                    "Compile warmup must restore a prefix and prefill multiple new tokens."
+                    "Warmup must restore a prefix and prefill multiple new tokens."
                 )
             del result
             cache.clear()
             decode_activation_bytes = 0
             decode_batch_sizes = ()
-            if self.engine.torch_compile:
-                decode_activation_bytes, decode_batch_sizes = self.engine.warm_decode(
-                    input_ids
-                )
             torch.cuda.synchronize(device)
             torch.cuda.empty_cache()
             baseline = torch.cuda.memory_reserved(device)
@@ -213,7 +209,7 @@ class TextGenerator:
         torch.cuda.synchronize(device)
         torch.cuda.empty_cache()
         warmup_kv_bytes = (
-            len(input_ids) + COMPILE_WARMUP_OUTPUT_TOKENS
+            len(input_ids) + WARMUP_OUTPUT_TOKENS
         ) * self.engine.generator.cache.bytes_per_token
         if self.engine.generator.paged_attention:
             warmup_kv_bytes = 0
@@ -249,12 +245,7 @@ class TextGenerator:
             "status": "ok",
             "model": self.engine.model_id,
             "model_revision": self.engine.model_revision,
-            "torch_compile": {
-                "enabled": self.engine.torch_compile,
-                "scope": "decode",
-                "warmup_batch_sizes": list(self._decode_warmup_batch_sizes),
-                "warmed": self._warmed and self.engine.torch_compile,
-            },
+            "warmup_batch_sizes": list(self._decode_warmup_batch_sizes),
             "memory": self.engine.report.as_dict(),
             "scheduler": self.engine.scheduler_snapshot(),
         }

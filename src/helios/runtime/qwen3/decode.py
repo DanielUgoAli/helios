@@ -10,7 +10,6 @@ from helios.runtime.qwen3.model import Qwen3Model
 from helios.runtime.qwen3.paged_cache import (
     KVPagePool,
     PagedBatchCache,
-    PagedDecodeCache,
     PagedKVCache,
 )
 from helios.runtime.types import Sampling
@@ -47,32 +46,9 @@ class DecodedTokens:
 
 
 class Decoder:
-    def __init__(self, model: Qwen3Model, *, torch_compile: bool = False) -> None:
+    def __init__(self, model: Qwen3Model) -> None:
         self.model = model
         self.page_pool: KVPagePool | None = None
-        self._compiled_decode = (
-            torch.compile(
-                model.decode_forward,
-                backend="inductor",
-                dynamic=True,
-                fullgraph=True,
-                mode="default",
-            )
-            if torch_compile
-            else None
-        )
-
-        self._compiled_paged_decode = (
-            torch.compile(
-                model.paged_decode_forward,
-                backend="inductor",
-                dynamic=True,
-                fullgraph=True,
-                mode="default",
-            )
-            if torch_compile
-            else None
-        )
 
     def generate(
         self,
@@ -190,22 +166,12 @@ class Decoder:
                 cache = PagedBatchCache(caches)
                 cache.prepare(1)
                 slots = tuple(range(len(caches)))
-                if self._compiled_paged_decode is not None:
-                    logits = self._compiled_paged_decode(
-                        tokens,
-                        PagedDecodeCache(cache),
-                        cache.slot_lengths(slots).unsqueeze(1),
-                    )
-                    cache.advance(1)
-                    return logits[:, -1, :]
                 return self.model(
                     tokens,
                     cache=cache,
                     position_ids=cache.slot_lengths(slots).unsqueeze(1),
                     cache_slots=slots,
                 )[:, -1, :]
-            if self._compiled_decode is not None:
-                return self._decode_dense(tokens, caches)[:, -1, :]
             if len(caches) == 1:
                 return self.model(tokens, cache=caches[0])[:, -1, :]
 
@@ -218,50 +184,6 @@ class Decoder:
                 position_ids=positions,
                 cache_slots=slots,
             )[:, -1, :]
-
-    def _decode_dense(
-        self, tokens: torch.Tensor, caches: list[KVCache]
-    ) -> torch.Tensor:
-        BatchedKVCache(caches)
-        lengths = [cache.length for cache in caches]
-        if any(
-            length >= cache.capacity
-            for length, cache in zip(lengths, caches, strict=True)
-        ):
-            raise ValueError("Decode would exceed request KV capacity.")
-        key_length = max(lengths) + 1
-        positions = torch.tensor(lengths, device=self.device).unsqueeze(1)
-        layers = []
-        for layer_index in range(self.model.config.n_layers):
-            if len(caches) == 1:
-                entry = caches[0]._layers[layer_index]
-                layers.append(
-                    (entry.keys[:, :, :key_length], entry.values[:, :, :key_length])
-                )
-                continue
-            reference = caches[0]._layers[layer_index].keys
-            keys = reference.new_zeros(
-                len(caches), reference.shape[1], key_length, reference.shape[3]
-            )
-            values = torch.zeros_like(keys)
-            for row, cache in enumerate(caches):
-                entry = cache._layers[layer_index]
-                keys[row, :, : cache.length].copy_(entry.keys[0, :, : cache.length])
-                values[row, :, : cache.length].copy_(entry.values[0, :, : cache.length])
-            layers.append((keys, values))
-        mask = None
-        if len(set(lengths)) > 1:
-            mask = (torch.arange(key_length, device=self.device)[None, :] <= positions)[
-                :, None, None, :
-            ]
-        logits = self._compiled_decode(tokens, tuple(layers), positions, mask)
-        for row, cache in enumerate(caches):
-            if len(caches) > 1:
-                for entry, (keys, values) in zip(cache._layers, layers, strict=True):
-                    entry.keys[0, :, cache.length].copy_(keys[row, :, cache.length])
-                    entry.values[0, :, cache.length].copy_(values[row, :, cache.length])
-            cache.advance(1)
-        return logits
 
     def decode(
         self,

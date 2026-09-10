@@ -203,7 +203,6 @@ class PagedKVCacheTests(unittest.TestCase):
                     model_id="test-cpu",
                     hf_token=None,
                     paged_attention=True,
-                    torch_compile=True,
                     max_batch_size=1,
                     batch_wait_ms=0,
                 ),

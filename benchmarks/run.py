@@ -362,7 +362,7 @@ def main() -> None:
 
     now = datetime.now(UTC)
     record = {
-        "schema_version": 5,
+        "schema_version": 6,
         "timestamp": now.isoformat(),
         "label": args.label,
         "machine": {"hostname": socket.gethostname(), "platform": platform.platform()},
@@ -376,7 +376,6 @@ def main() -> None:
         },
         "execution_mode": "continuous-batch",
         "continuous_batch_metrics": continuous_batch_metrics,
-        "torch_compile": health["torch_compile"],
         "warmup": warmup,
         "samples": samples,
     }

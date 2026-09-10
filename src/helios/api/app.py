@@ -16,9 +16,8 @@ logger = logging.getLogger("uvicorn.error")
 async def lifespan(app: FastAPI):
     config = get_config()
     logger.info(
-        "startup_model_loading model=%s torch_compile=%s",
+        "startup_model_loading model=%s",
         config.model_id,
-        config.torch_compile,
     )
     tokenizer = Tokenizer.load(config)
     logger.info(
