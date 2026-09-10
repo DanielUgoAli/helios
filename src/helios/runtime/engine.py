@@ -318,9 +318,17 @@ class Engine:
 
     def _decode_active_requests(self) -> None:
         tokens = [active.pending_token_id for active in self._active_requests]
-        self.generator.decoder._synchronize()
         started = time.perf_counter()
-        logger.info(
+        device = self.generator.decoder.device
+        events = None
+        if device.type == "cuda":
+            stream = torch.cuda.current_stream(device)
+            events = (
+                torch.cuda.Event(enable_timing=True),
+                torch.cuda.Event(enable_timing=True),
+            )
+            events[0].record(stream)
+        logger.debug(
             "continuous_decode active_request_ids=%s %s",
             [active.request.request_id for active in self._active_requests],
             self._memory_log_fields(self._reserved_memory_bytes()),
@@ -328,16 +336,30 @@ class Engine:
         logits = self.generator.decoder.decode_caches(
             [active.cache for active in self._active_requests], tokens
         )
-        self.generator.decoder._synchronize()
-        elapsed = time.perf_counter() - started
+        if events is not None:
+            events[1].record(stream)
+        if all(
+            active.request.sampling.temperature == 0 for active in self._active_requests
+        ):
+            sampled = logits.argmax(dim=-1)
+        else:
+            sampled = torch.cat(
+                [
+                    self.generator.decoder._sample(
+                        logits[row : row + 1], active.request.sampling
+                    ).reshape(-1)
+                    for row, active in enumerate(self._active_requests)
+                ]
+            )
+        token_ids = sampled.cpu().tolist()
+        elapsed = (
+            events[0].elapsed_time(events[1]) / 1_000
+            if events is not None
+            else time.perf_counter() - started
+        )
 
         surviving: list[_ActiveRequest] = []
-        for row, active in enumerate(self._active_requests):
-            token_id = int(
-                self.generator.decoder._sample(
-                    logits[row : row + 1], active.request.sampling
-                ).item()
-            )
+        for active, token_id in zip(self._active_requests, token_ids, strict=True):
             active.inter_token_seconds.append(elapsed)
             queue_seconds = active.started_at - active.job.enqueued_at
             if self._accept_token(active, token_id, queue_seconds):

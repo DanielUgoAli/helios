@@ -329,6 +329,54 @@ class ContinuousBatchingTests(unittest.TestCase):
         self.finish(engine, next_request)
         self.assert_matches_single(next_request, [7, 8, 9, 10], 10)
 
+    def test_decode_does_not_synchronize_device_or_sample_greedy_rows_separately(self):
+        engine = self.make_engine(slots=2)
+        first = self.enqueue(engine, "first", [3, 4, 5], 5)
+        second = self.enqueue(engine, "second", [6, 7, 8], 5)
+        self.tick(engine)
+        with (
+            patch.object(
+                engine.generator.decoder,
+                "_synchronize",
+                side_effect=AssertionError("device wait"),
+            ),
+            patch.object(
+                engine.generator.decoder,
+                "_sample",
+                side_effect=AssertionError("row sampling"),
+            ),
+        ):
+            self.finish(engine, first, second)
+        self.assert_matches_single(first, [3, 4, 5], 5)
+        self.assert_matches_single(second, [6, 7, 8], 5)
+
+    def test_mixed_sampling_preserves_row_order_and_random_draws(self):
+        engine = self.make_engine(slots=3)
+        settings = (
+            Sampling(temperature=0, top_p=1, max_new_tokens=5),
+            Sampling(temperature=0.7, top_p=0.8, max_new_tokens=5),
+            Sampling(temperature=1.2, top_p=0.95, max_new_tokens=5),
+        )
+        for row, sampling in enumerate(settings):
+            engine.enqueue([3 + row, 7, 8], 0, sampling, request_id=str(row))
+        self.tick(engine)
+        logits = torch.linspace(-1, 1, 64).repeat(3, 1)
+        logits[:, 0] = -100
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(91)
+            expected = [
+                engine.generator.decoder._sample(logits[row : row + 1], sampling).item()
+                for row, sampling in enumerate(settings)
+            ]
+            torch.manual_seed(91)
+            with patch.object(
+                engine.generator.decoder, "decode_caches", return_value=logits
+            ):
+                engine._decode_active_requests()
+        self.assertEqual(
+            [active.output_ids[-1] for active in engine._active_requests], expected
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
