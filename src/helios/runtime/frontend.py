@@ -209,16 +209,9 @@ class TextGenerator:
             cache.clear()
         torch.cuda.synchronize(device)
         torch.cuda.empty_cache()
-        warmup_kv_bytes = (
-            len(input_ids) + WARMUP_OUTPUT_TOKENS
-        ) * self.engine.generator.cache.bytes_per_token
-        if self.engine.generator.paged_attention:
-            warmup_kv_bytes = 0
         self.engine.update_cache_capacity(
-            warmup_peak_bytes=max(
-                warmup_peak_bytes, decode_activation_bytes + warmup_kv_bytes
-            ),
-            warmup_kv_bytes=warmup_kv_bytes,
+            warmup_peak_bytes=max(warmup_peak_bytes, decode_activation_bytes),
+            warmup_kv_bytes=0,
         )
         self._decode_warmup_batch_sizes = decode_batch_sizes
         self._warmed = True

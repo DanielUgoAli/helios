@@ -53,7 +53,7 @@ After warmup completes, the server listens on `http://127.0.0.1:8000`.
 curl http://127.0.0.1:8000/health
 ```
 
-The health response includes the loaded model revision, compile state, profiled
+The health response includes the loaded model revision, warmed batch sizes, profiled
 memory budget, and a scheduler snapshot. Interactive API documentation is
 available at [`http://127.0.0.1:8000/docs`](http://127.0.0.1:8000/docs) while
 the server is running.
@@ -104,13 +104,13 @@ the rest of the OpenAI API are not implemented.
 Clients send ordinary chat-completion requests concurrently. The scheduler
 holds the first request for a short admission window, then prefills each
 admitted request into its own exact-capacity KV cache. Active requests share
-each one-token decode step, but finish independently; completed requests release
-only their own cache reservation while survivors keep decoding unchanged.
+each one-token decode step, but finish independently. Dense decode keeps request
+rows in persistent batch storage and rebuilds it when membership changes.
 
 Admission is strict FIFO. The queue head joins whenever an active-request slot
 and the shared KV-memory budget, including temporary batched-attention storage,
-permit it. A larger waiting request never drains or rebuilds existing requests;
-it waits until enough memory is released.
+permit it. A larger waiting request waits until enough memory is available;
+survivors retain their generated tokens and KV history when it joins.
 
 ```mermaid
 flowchart LR
@@ -131,10 +131,10 @@ repeated decode step where it matters most.
 
 ### Paged attention
 
-Enable the optional native PyTorch paged-attention path with:
+Helios uses native PyTorch paged attention and shared prefix pages by default:
 
 ```bash
-HELIOS_PAGED_ATTENTION=1 HELIOS_TORCH_COMPILE=1 uv run helios
+uv run helios
 ```
 
 This requires PyTorch 2.13 and an Ampere or newer NVIDIA GPU (SM80+) with
@@ -144,16 +144,15 @@ a page table; prefill and decode read those pages directly through PyTorch's
 additional kernel dependency.
 
 Completed prefix pages share the same storage. Pages return to the pool when
-their last request or prefix-cache reference is released. In this mode prefix
-blocks are also 256 tokens, so shorter prefixes are not cached. Admission still
+their last request or prefix-cache reference is released. Prefix
+blocks are 256 tokens, so shorter prefixes are not cached. Admission still
 reserves the request's maximum length, rounded up to whole pages, to guarantee
 space for decode. Evicting prefix entries frees pages within the pool rather
 than returning its backing memory to CUDA.
 
-Paging is off by default and supports decode-only `torch.compile`. Page allocation
-and request bookkeeping stay eager; compiled decode writes directly to the shared
-KV pool and calls native paged attention. Prefill stays eager. CUDA numerical tests are included but require a compatible GPU;
-CPU checks exercise a reference attention implementation, not the CUDA kernel.
+Decode writes directly to the shared KV pool and calls
+native paged attention. CUDA numerical tests require a compatible GPU; CPU checks
+exercise a reference attention implementation, not the CUDA kernel.
 
 ## Architecture
 
@@ -183,20 +182,16 @@ flowchart TD
 At startup, Helios resolves one Hugging Face snapshot for both tokenizer and
 model, checks available GPU memory, loads the safetensors into the native Qwen3
 implementation, and creates a provisional KV limit. A cold/prefix warmup covers
-the eager prefill and prefix restoration paths. With compilation enabled, startup
-also runs fixed decode steps through the serving decode entrypoint for every batch
-size from 1 through `HELIOS_MAX_BATCH_SIZE`, using equal and mixed prompt lengths
-and fresh request caches. Warmup fails if the provisional KV budget cannot fit
-these small batches; reduce the maximum batch size in that case. Sampling and
-scheduler bookkeeping remain outside compilation, and early EOS cannot skip the
-decode warmup. Health reports `torch_compile.scope` and `warmup_batch_sizes`.
+the prefill and prefix restoration paths. Startup also profiles fixed decode steps
+for every batch size from 1 through `HELIOS_MAX_BATCH_SIZE`, with equal and mixed
+prompt lengths. Early EOS cannot skip those decode steps. Health reports
+`warmup_batch_sizes`.
 
-Helios measures the warmed cold path and batched decode activation peak after
-compilation, then sets one shared memory budget for active request KV and retained
-prefix KV. Compiled dense batches use temporary packed K/V tensors for all layers;
-this extra workspace is included in startup profiling. New shapes can still cause
-compilation during serving; warmup does not cover every possible context length.
-Use `TORCH_LOGS=recompiles,graph_breaks` to inspect graph reuse on the target GPU.
+Helios measures cold-path and batched decode memory peaks, then sets one shared
+budget for active request KV and retained prefix KV. Dense batches retain padded
+K/V storage across decode steps, with each request viewing its own row. Membership
+changes rebuild that storage; admission accounts for both the existing allocation
+and its replacement.
 
 For a single request, the tokenizer applies the Qwen3 chat template. Helios
 hashes complete prompt blocks, restores the longest cached chain of per-layer
@@ -205,15 +200,18 @@ Completed prompt blocks can then be retained for later requests. Cache entries
 have a sliding TTL and are evicted least-recently-used when active KV needs
 space.
 
-Continuous requests use independent KV caches with their own logical lengths.
-New prompts join active decoding when a request slot and memory are available;
-finished requests release their allocations without disturbing survivors. Every
-request must fit the model context window and the shared KV budget.
+Continuous requests keep their own logical KV lengths and page tables. Requests
+with a cached prefix share its physical K/V pages; new tokens use private pages.
+Pages become reusable after the last request and prefix-cache reference releases
+them. New prompts join active decoding when a request slot and memory are
+available. Every request must fit the model context window and shared KV budget.
 
-Cold prefills use causal scaled-dot-product attention without materializing a
-dense mask. On supported NVIDIA GPUs, eligible unmasked attention calls are
-forced through PyTorch's Flash Attention backend; masked paths continue through
-PyTorch's normal backend selection.
+Continuous decode transfers sampled tokens to the CPU once per batch for EOS and
+completion checks. CUDA events measure decode time without device-wide waits;
+greedy sampling runs across all rows together.
+
+Prefill and decode use causal paged attention on NVIDIA GPUs, reading K/V
+through page tables without gathering shared prefixes into dense request caches.
 
 ## Diagnostics and logs
 
@@ -235,8 +233,6 @@ Helios loads a local `.env` file automatically.
 | `HELIOS_MODEL_ID` | `Qwen/Qwen3-4B` | Model repository. No other architecture is currently implemented. |
 | `HELIOS_MODEL_REVISION` | latest resolved snapshot | Pins tokenizer and model files to a Hugging Face revision. |
 | `HF_TOKEN` / `HF_API_KEY` | unset | Hugging Face authentication. |
-| `HELIOS_TORCH_COMPILE` | `0` | Set to `1`, `true`, or `yes` to compile dense or paged single-request and batched decode with Inductor (`dynamic=True`, `fullgraph=True`, `mode="default"`); prefill stays eager. |
-| `HELIOS_PAGED_ATTENTION` | `0` | Use native paged attention and shared 256-token KV/prefix pages; compatible with `HELIOS_TORCH_COMPILE=1`. |
 | `HELIOS_MAX_GPU_UTILIZATION` | `0.90` | Fraction of total GPU memory available to model residency, activation reserve, and KV state. |
 | `HELIOS_WEIGHT_HEADROOM_RATIO` | `0.20` | Additional free-memory requirement before loading weights. |
 | `HELIOS_KV_CACHE_HEADROOM_RATIO` | `0.20` | Safety margin above measured warmup activation memory. |
@@ -256,7 +252,7 @@ second terminal:
 
 ```bash
 # Terminal 1
-HELIOS_TORCH_COMPILE=1 uv run helios
+uv run helios
 
 # Terminal 2
 uv run python benchmarks/run.py --label continuous-batch
@@ -296,9 +292,9 @@ dataset.json             # Default benchmark workload
 Helios deliberately keeps serving small and inspectable. It does not provide
 streaming, quantization, multi-model serving, distributed execution, optimized
 custom kernels, or production controls such as authentication and rate
-limiting. Continuous batching still prefills one request at a time. The default
-decode path uses independent dense per-request caches; native paged attention is
-opt-in and does not add chunked prefill or batched prefill.
+limiting. Continuous batching still prefills one request at a time. Native paged
+attention shares prefix storage and does not add chunked prefill or batched
+prefill.
 
 The goal is to keep a correct, understandable baseline for each mechanism and
 measure the effect before adding the next optimization.

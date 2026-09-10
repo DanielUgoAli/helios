@@ -11,7 +11,6 @@ from helios.runtime.check import MemoryChecker
 from helios.runtime.generate import GenerationResult, Generator, PrefixTrace
 from helios.runtime.load import Loader
 from helios.runtime.prefix_cache import PromptBlockView, describe_prompt_blocks
-from helios.runtime.qwen3.cache import KVCache
 from helios.runtime.qwen3.paged_cache import PagedKVCache
 from helios.runtime.scheduler import Job, Scheduler
 from helios.runtime.types import Sampling
@@ -31,7 +30,7 @@ class _Request:
 class _ActiveRequest:
     job: Job[_Request, GenerationResult]
     request: _Request
-    cache: KVCache | PagedKVCache
+    cache: PagedKVCache
     reservation_bytes: int
     output_ids: list[int]
     pending_token_id: int
@@ -56,7 +55,6 @@ class Engine:
             loaded.model,
             loaded.cache,
             prefix_cache_ttl_seconds=config.prefix_cache_ttl_seconds,
-            paged_attention=config.paged_attention,
         )
         self._generation_lock = Lock()
         self._max_batch_size = config.max_batch_size
@@ -79,9 +77,8 @@ class Engine:
                 raise RuntimeError(
                     "Cannot reprofile KV memory while requests are active."
                 )
-            if self.generator.paged_attention:
-                self.generator.release_page_pool()
-                torch.cuda.empty_cache()
+            self.generator.release_page_pool()
+            torch.cuda.empty_cache()
             cache = self._memory_checker.cache(
                 self.generator.decoder.model.config,
                 warmup_peak_bytes=warmup_peak_bytes,
@@ -114,8 +111,7 @@ class Engine:
                 self.generator.decoder.release_cache(active.cache)
             self._active_requests = []
             self.generator.reserve_active_cache(0)
-            if self.generator.paged_attention:
-                self.generator.release_page_pool()
+            self.generator.release_page_pool()
 
     def run(
         self,
@@ -464,23 +460,7 @@ class Engine:
         kv_bytes = sum(item.reservation_bytes for item in active)
         if extra_capacity:
             kv_bytes += self.generator.request_cache_bytes(extra_capacity)
-        if self.generator.paged_attention:
-            return kv_bytes
-        count = len(active) + bool(extra_capacity)
-        kv_bytes = self.generator.decoder.dense_reservation_bytes(
-            [item.cache for item in active], extra_capacity=extra_capacity
-        )
-        if count < 2:
-            return kv_bytes
-        capacities = [item.cache.capacity for item in active]
-        if extra_capacity:
-            capacities.append(extra_capacity)
-        model_config = self.generator.decoder.model.config
-        max_capacity = max(capacities)
-        attention_workspace_bytes = (
-            count * model_config.n_heads * max_capacity * (1 + 4)
-        )
-        return kv_bytes + attention_workspace_bytes
+        return kv_bytes
 
     def _memory_log_fields(self, kv_reserved_bytes: int) -> str:
         cache = self.generator.cache

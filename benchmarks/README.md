@@ -1,10 +1,10 @@
 # Dataset continuous-batching benchmark
 
-Start Helios in one terminal. Model loading and the one-time compile warmup
+Start Helios in one terminal. Model loading and the one-time memory-profiling warmup
 belong to the server process:
 
 ```bash
-HELIOS_TORCH_COMPILE=1 uv run helios
+uv run helios
 ```
 
 Then run the HTTP-only benchmark client in another terminal:

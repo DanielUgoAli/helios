@@ -15,7 +15,7 @@ from helios.runtime.qwen3.model import Qwen3Model
 from helios.runtime.qwen3.paged_cache import KVPagePool
 from helios.runtime.types import Sampling
 
-PREFIX_CACHE_BLOCK_SIZE = 16
+PREFIX_CACHE_BLOCK_SIZE = 256
 logger = logging.getLogger("uvicorn.error")
 
 
@@ -56,18 +56,15 @@ class Generator:
         model: Qwen3Model,
         cache: CacheCapacity,
         prefix_cache_ttl_seconds: float = 300.0,
-        paged_attention: bool = False,
     ) -> None:
         self.decoder = Decoder(model)
         self.cache = cache
-        self.paged_attention = paged_attention
         self.prefix_cache = PrefixCache(
-            block_size=256 if paged_attention else PREFIX_CACHE_BLOCK_SIZE,
+            block_size=PREFIX_CACHE_BLOCK_SIZE,
             max_memory_bytes=cache.kv_budget_bytes,
             ttl_seconds=prefix_cache_ttl_seconds,
         )
-        if paged_attention:
-            self._create_page_pool()
+        self._create_page_pool()
 
     def _create_page_pool(self) -> None:
         page_size = self.prefix_cache.block_size
@@ -92,9 +89,8 @@ class Generator:
         self.decoder.page_pool = None
 
     def request_cache_bytes(self, capacity: int) -> int:
-        if self.paged_attention:
-            size = self.prefix_cache.block_size
-            capacity = (capacity + size - 1) // size * size
+        size = self.prefix_cache.block_size
+        capacity = (capacity + size - 1) // size * size
         return capacity * self.cache.bytes_per_token
 
     @property
@@ -103,17 +99,10 @@ class Generator:
 
     def update_cache_capacity(self, cache: CacheCapacity) -> None:
         self.cache = cache
-        if self.paged_attention:
-            self._create_page_pool()
-            return
-        self.prefix_cache.max_memory_bytes = cache.kv_budget_bytes
-        if self.prefix_cache.reserve(0):
-            torch.cuda.empty_cache()
+        self._create_page_pool()
 
     def reserve_active_cache(self, memory_bytes: int) -> None:
-        reclaimed = self.prefix_cache.reserve(memory_bytes)
-        if reclaimed and not self.paged_attention:
-            torch.cuda.empty_cache()
+        self.prefix_cache.reserve(memory_bytes)
 
     def run(
         self,
