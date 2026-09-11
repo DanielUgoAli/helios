@@ -103,9 +103,10 @@ the rest of the OpenAI API are not implemented.
 
 Clients send ordinary chat-completion requests concurrently. The scheduler
 holds the first request for a short admission window, then prefills each
-admitted request into its own exact-capacity KV cache. Active requests share
-each one-token decode step, but finish independently. Dense decode keeps request
-rows in persistent batch storage and rebuilds it when membership changes.
+admitted request into its own exact-capacity KV cache. Prefill resumes in bounded
+chunks between shared one-token decode steps, so a long new prompt does not stop
+active decode. Requests finish independently. Dense decode keeps request rows in
+persistent batch storage and rebuilds it when membership changes.
 
 Admission is strict FIFO. The queue head joins whenever an active-request slot
 and the shared KV-memory budget, including temporary batched-attention storage,
@@ -237,6 +238,7 @@ Helios loads a local `.env` file automatically.
 | `HELIOS_WEIGHT_HEADROOM_RATIO` | `0.20` | Additional free-memory requirement before loading weights. |
 | `HELIOS_KV_CACHE_HEADROOM_RATIO` | `0.20` | Safety margin above measured warmup activation memory. |
 | `HELIOS_PREFIX_CACHE_TTL_SECONDS` | `300` | Sliding lifetime of a cached prompt block. |
+| `HELIOS_PREFILL_CHUNK_SIZE` | `256` | Maximum prompt tokens processed across one scheduler iteration. |
 | `HELIOS_MAX_BATCH_SIZE` | `8` | Maximum number of concurrently active continuous requests. |
 | `HELIOS_MAX_QUEUE_SIZE` | `32` | Maximum number of waiting jobs; excess work receives HTTP 503. |
 | `HELIOS_BATCH_WAIT_MS` | `2` | Initial admission window after the first queued request arrives. |
@@ -292,9 +294,9 @@ dataset.json             # Default benchmark workload
 Helios deliberately keeps serving small and inspectable. It does not provide
 streaming, quantization, multi-model serving, distributed execution, optimized
 custom kernels, or production controls such as authentication and rate
-limiting. Continuous batching still prefills one request at a time. Native paged
-attention shares prefix storage and does not add chunked prefill or batched
-prefill.
+limiting. Continuous batching interleaves sequential prefill chunks with active
+decode. Native paged attention shares prefix storage; batched prefill is not
+implemented.
 
 The goal is to keep a correct, understandable baseline for each mechanism and
 measure the effect before adding the next optimization.

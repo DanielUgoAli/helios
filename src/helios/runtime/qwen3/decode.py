@@ -1,5 +1,6 @@
 import logging
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import torch
@@ -34,6 +35,14 @@ class PrefillResult:
     cache: KVCache | PagedKVCache
     logits: torch.Tensor
     prefill_seconds: float
+    restore_seconds: float
+    restored_tokens: int
+
+
+@dataclass
+class PrefillState:
+    cache: KVCache | PagedKVCache
+    next_token_offset: int
     restore_seconds: float
     restored_tokens: int
 
@@ -91,6 +100,35 @@ class Decoder:
         max_total_tokens: int,
         prefix_hit: PrefixCacheHit | None = None,
     ) -> PrefillResult:
+        state = self.begin_prefill(
+            input_ids,
+            sampling,
+            max_total_tokens=max_total_tokens,
+            prefix_hit=prefix_hit,
+        )
+        try:
+            logits, prefill_seconds = self.prefill_chunk(
+                state.cache, input_ids[state.next_token_offset :]
+            )
+        except Exception:
+            self.release_cache(state.cache)
+            raise
+        return PrefillResult(
+            cache=state.cache,
+            logits=logits,
+            prefill_seconds=prefill_seconds,
+            restore_seconds=state.restore_seconds,
+            restored_tokens=state.restored_tokens,
+        )
+
+    def begin_prefill(
+        self,
+        input_ids: list[int],
+        sampling: Sampling,
+        *,
+        max_total_tokens: int,
+        prefix_hit: PrefixCacheHit | None = None,
+    ) -> PrefillState:
         capacity = len(input_ids) + sampling.max_new_tokens
         if capacity > max_total_tokens:
             raise ValueError(
@@ -129,28 +167,46 @@ class Decoder:
             restore_started = time.perf_counter()
             cache.restore_blocks(tuple(block.snapshot for block in cached_blocks))
             restore_seconds = time.perf_counter() - restore_started
-            restored_tokens = cache.length
-            token_tensor = torch.tensor(
-                input_ids[cache.length :], device=self.device
-            ).unsqueeze(0)
-            self.model.eval()
-            with torch.inference_mode():
-                self._synchronize()
-                started = time.perf_counter()
-                forward_logits = self._forward_cache(token_tensor, cache)
-                self._validate_forward_shapes(token_tensor, forward_logits)
-                self._synchronize()
-                prefill_seconds = time.perf_counter() - started
-            return PrefillResult(
+            return PrefillState(
                 cache=cache,
-                logits=forward_logits[:, -1, :],
-                prefill_seconds=prefill_seconds,
+                next_token_offset=cache.length,
                 restore_seconds=restore_seconds,
-                restored_tokens=restored_tokens,
+                restored_tokens=cache.length,
             )
         except Exception:
             self.release_cache(cache)
             raise
+
+    def prefill_chunk(
+        self,
+        cache: KVCache | PagedKVCache,
+        input_ids_slice: Sequence[int] | torch.Tensor,
+    ) -> tuple[torch.Tensor, float]:
+        if isinstance(input_ids_slice, torch.Tensor):
+            token_tensor = input_ids_slice.to(device=self.device, dtype=torch.long)
+            if token_tensor.ndim == 1:
+                token_tensor = token_tensor.unsqueeze(0)
+        else:
+            token_tensor = torch.tensor(
+                input_ids_slice, dtype=torch.long, device=self.device
+            ).unsqueeze(0)
+        if (
+            token_tensor.ndim != 2
+            or token_tensor.shape[0] != 1
+            or token_tensor.shape[1] < 1
+        ):
+            raise ValueError(
+                "Prefill chunks must contain at least one token with shape [1, tokens]."
+            )
+        self.model.eval()
+        with torch.inference_mode():
+            self._synchronize()
+            started = time.perf_counter()
+            forward_logits = self._forward_cache(token_tensor, cache)
+            self._validate_forward_shapes(token_tensor, forward_logits)
+            self._synchronize()
+            elapsed = time.perf_counter() - started
+        return forward_logits[:, -1, :], elapsed
 
     def decode_caches(
         self, caches: list[KVCache | PagedKVCache], token_ids: list[int]

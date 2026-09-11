@@ -14,6 +14,7 @@ class HeliosConfig:
     weight_headroom_ratio: float = 0.20
     kv_cache_headroom_ratio: float = 0.20
     prefix_cache_ttl_seconds: float = 300.0
+    prefill_chunk_size: int = 256
     max_batch_size: int = 8
     max_queue_size: int = 32
     batch_wait_ms: float = 2.0
@@ -39,6 +40,12 @@ class HeliosConfig:
             raise ValueError(
                 "prefix_cache_ttl_seconds must be finite and greater than 0."
             )
+        if (
+            not isinstance(self.prefill_chunk_size, int)
+            or isinstance(self.prefill_chunk_size, bool)
+            or self.prefill_chunk_size < 1
+        ):
+            raise ValueError("prefill_chunk_size must be a positive integer.")
         if self.max_batch_size < 1:
             raise ValueError("max_batch_size must be at least 1.")
         if self.max_queue_size < 1:
@@ -61,6 +68,7 @@ def get_config() -> HeliosConfig:
         prefix_cache_ttl_seconds=float(
             os.getenv("HELIOS_PREFIX_CACHE_TTL_SECONDS", "300")
         ),
+        prefill_chunk_size=int(os.getenv("HELIOS_PREFILL_CHUNK_SIZE", "256")),
         max_batch_size=int(os.getenv("HELIOS_MAX_BATCH_SIZE", "8")),
         max_queue_size=int(os.getenv("HELIOS_MAX_QUEUE_SIZE", "32")),
         batch_wait_ms=float(os.getenv("HELIOS_BATCH_WAIT_MS", "2")),

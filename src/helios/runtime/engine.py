@@ -33,8 +33,9 @@ class _ActiveRequest:
     cache: PagedKVCache
     reservation_bytes: int
     output_ids: list[int]
-    pending_token_id: int
-    started_at: float
+    prompt_offset: int
+    pending_token_id: int | None
+    queue_seconds: float
     prefill_seconds: float
     inter_token_seconds: list[float]
     prefix_lookup_seconds: float
@@ -58,6 +59,7 @@ class Engine:
         )
         self._generation_lock = Lock()
         self._max_batch_size = config.max_batch_size
+        self._prefill_chunk_size = config.prefill_chunk_size
         self._active_requests: list[_ActiveRequest] = []
         self._scheduler: Scheduler[_Request, GenerationResult] = Scheduler(
             self._continuous_tick,
@@ -190,7 +192,18 @@ class Engine:
                 except Exception as error:
                     self._fail_active_requests(error)
 
-            self._admit_requests(scheduler)
+            prefill_budget = self._prefill_chunk_size
+            while True:
+                self._admit_requests(scheduler)
+                prefill_budget, released_capacity = self._prefill_active_requests(
+                    prefill_budget
+                )
+                if prefill_budget == 0:
+                    if released_capacity:
+                        self._admit_requests(scheduler)
+                    break
+                if not released_capacity:
+                    break
             scheduler.set_active(tuple(active.job for active in self._active_requests))
             return bool(self._active_requests or scheduler.peek() is not None)
 
@@ -254,15 +267,14 @@ class Engine:
             request.sampling.max_new_tokens,
             queue_seconds * 1_000,
         )
-        request_started = time.perf_counter()
-        prefill = None
+        prefill_state = None
         active = None
         try:
             self.generator.reserve_active_cache(reserved_memory_bytes)
             lookup_started = time.perf_counter()
             prefix_hit = self.generator.prefix_cache.longest_prefix(request.input_ids)
             prefix_lookup_seconds = time.perf_counter() - lookup_started
-            prefill = self.generator.decoder.prefill(
+            prefill_state = self.generator.decoder.begin_prefill(
                 request.input_ids,
                 request.sampling,
                 max_total_tokens=self.generator.cache.max_tokens,
@@ -271,49 +283,110 @@ class Engine:
             active = _ActiveRequest(
                 job=job,
                 request=request,
-                cache=prefill.cache,
+                cache=prefill_state.cache,
                 reservation_bytes=reservation_bytes,
                 output_ids=[],
-                pending_token_id=0,
-                started_at=request_started,
-                prefill_seconds=prefill.prefill_seconds,
+                prompt_offset=prefill_state.next_token_offset,
+                pending_token_id=None,
+                queue_seconds=queue_seconds,
+                prefill_seconds=0.0,
                 inter_token_seconds=[],
                 prefix_lookup_seconds=prefix_lookup_seconds,
-                restore_seconds=prefill.restore_seconds,
+                restore_seconds=prefill_state.restore_seconds,
                 hit_tokens=0 if prefix_hit is None else prefix_hit.length,
-                restored_tokens=prefill.restored_tokens,
+                restored_tokens=prefill_state.restored_tokens,
                 prompt_blocks=describe_prompt_blocks(
                     request.input_ids,
                     self.generator.prefix_cache.block_size,
                     prefix_hit,
                 ),
             )
-            token_id = int(
-                self.generator.decoder._sample(prefill.logits, request.sampling).item()
+            self._active_requests.append(active)
+            logger.info(
+                "continuous_admitted request_id=%s active_request_ids=%s %s",
+                request.request_id,
+                [item.request.request_id for item in self._active_requests],
+                self._memory_log_fields(self._reserved_memory_bytes()),
             )
-            if self._accept_token(active, token_id, queue_seconds):
-                self._active_requests.append(active)
-                logger.info(
-                    "continuous_admitted request_id=%s active_request_ids=%s %s",
-                    request.request_id,
-                    [item.request.request_id for item in self._active_requests],
-                    self._memory_log_fields(self._reserved_memory_bytes()),
-                )
-            else:
-                active = None
-                prefill = None
-                self.generator.reserve_active_cache(self._reserved_memory_bytes())
         except Exception as error:
-            if prefill is not None:
-                self.generator.decoder.release_cache(prefill.cache)
+            if active is not None:
+                self._active_requests = [
+                    item for item in self._active_requests if item is not active
+                ]
+            if prefill_state is not None:
+                self.generator.decoder.release_cache(prefill_state.cache)
             if not job.future.done():
                 job.future.set_exception(error)
             active = None
-            prefill = None
+            prefill_state = None
             self.generator.reserve_active_cache(self._reserved_memory_bytes())
 
+    def _prefill_active_requests(self, budget: int) -> tuple[int, bool]:
+        removed_ids: set[int] = set()
+        for active in self._active_requests:
+            if budget == 0:
+                break
+            if active.pending_token_id is not None:
+                continue
+            try:
+                chunk_size = min(
+                    budget, len(active.request.input_ids) - active.prompt_offset
+                )
+                if chunk_size < 1:
+                    raise RuntimeError("An unfinished prefill has no prompt tokens left.")
+                chunk = active.request.input_ids[
+                    active.prompt_offset : active.prompt_offset + chunk_size
+                ]
+                logits, elapsed = self.generator.decoder.prefill_chunk(
+                    active.cache, chunk
+                )
+                active.prompt_offset += chunk_size
+                active.prefill_seconds += elapsed
+                budget -= chunk_size
+                if active.prompt_offset < len(active.request.input_ids):
+                    continue
+                active.queue_seconds = max(
+                    0.0,
+                    time.perf_counter()
+                    - active.job.enqueued_at
+                    - active.prefix_lookup_seconds
+                    - active.restore_seconds
+                    - active.prefill_seconds,
+                )
+                token_id = int(
+                    self.generator.decoder._sample(
+                        logits, active.request.sampling
+                    ).item()
+                )
+                if not self._accept_token(active, token_id, active.queue_seconds):
+                    removed_ids.add(id(active))
+            except Exception as error:
+                self.generator.decoder.release_cache(active.cache)
+                if not active.job.future.done():
+                    active.job.future.set_exception(error)
+                removed_ids.add(id(active))
+        if removed_ids:
+            self._active_requests = [
+                active
+                for active in self._active_requests
+                if id(active) not in removed_ids
+            ]
+            self.generator.reserve_active_cache(self._reserved_memory_bytes())
+        return budget, bool(removed_ids)
+
     def _decode_active_requests(self) -> None:
-        tokens = [active.pending_token_id for active in self._active_requests]
+        decoding = [
+            active
+            for active in self._active_requests
+            if active.pending_token_id is not None
+        ]
+        if not decoding:
+            return
+        tokens: list[int] = []
+        for active in decoding:
+            if active.pending_token_id is None:
+                raise RuntimeError("A decoding request has no pending token.")
+            tokens.append(active.pending_token_id)
         started = time.perf_counter()
         device = self.generator.decoder.device
         events = None
@@ -326,16 +399,16 @@ class Engine:
             events[0].record(stream)
         logger.debug(
             "continuous_decode active_request_ids=%s %s",
-            [active.request.request_id for active in self._active_requests],
+            [active.request.request_id for active in decoding],
             self._memory_log_fields(self._reserved_memory_bytes()),
         )
         logits = self.generator.decoder.decode_caches(
-            [active.cache for active in self._active_requests], tokens
+            [active.cache for active in decoding], tokens
         )
         if events is not None:
             events[1].record(stream)
         if all(
-            active.request.sampling.temperature == 0 for active in self._active_requests
+            active.request.sampling.temperature == 0 for active in decoding
         ):
             sampled = logits.argmax(dim=-1)
         else:
@@ -344,7 +417,7 @@ class Engine:
                     self.generator.decoder._sample(
                         logits[row : row + 1], active.request.sampling
                     ).reshape(-1)
-                    for row, active in enumerate(self._active_requests)
+                    for row, active in enumerate(decoding)
                 ]
             )
         token_ids = sampled.cpu().tolist()
@@ -355,12 +428,16 @@ class Engine:
         )
 
         surviving: list[_ActiveRequest] = []
-        for active, token_id in zip(self._active_requests, token_ids, strict=True):
+        for active, token_id in zip(decoding, token_ids, strict=True):
             active.inter_token_seconds.append(elapsed)
-            queue_seconds = active.started_at - active.job.enqueued_at
-            if self._accept_token(active, token_id, queue_seconds):
+            if self._accept_token(active, token_id, active.queue_seconds):
                 surviving.append(active)
-        self._active_requests = surviving
+        surviving_ids = {id(active) for active in surviving}
+        self._active_requests = [
+            active
+            for active in self._active_requests
+            if active.pending_token_id is None or id(active) in surviving_ids
+        ]
         self.generator.reserve_active_cache(self._reserved_memory_bytes())
 
     def _accept_token(

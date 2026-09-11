@@ -131,8 +131,22 @@ class PagedKVCacheTests(unittest.TestCase):
         self.assertEqual(restored.length, 256)
         self.assertEqual(restored.pages[0].index, page_index)
 
+        sibling = PagedKVCache(self.pool, 512)
+        sibling.restore_blocks([snapshot])
+        self.assertIs(restored.pages[0], sibling.pages[0])
+        self.assertEqual(self.pool.free_pages, self.pool.num_pages - 1)
+        prefix_keys = self.pool.keys[0][page_index].clone()
+        prefix_values = self.pool.values[0][page_index].clone()
+        query, key, value = self.tensors(2, 1)
+        attend([restored, sibling], query, key, value)
+        self.assertNotEqual(restored.pages[1].index, sibling.pages[1].index)
+        torch.testing.assert_close(self.pool.keys[0][page_index], prefix_keys)
+        torch.testing.assert_close(self.pool.values[0][page_index], prefix_values)
+
         del snapshot
         restored.close()
+        self.assertEqual(self.pool.free_pages, self.pool.num_pages - 2)
+        sibling.close()
         gc.collect()
         self.assertEqual(self.pool.free_pages, self.pool.num_pages)
 
@@ -202,7 +216,6 @@ class PagedKVCacheTests(unittest.TestCase):
                 HeliosConfig(
                     model_id="test-cpu",
                     hf_token=None,
-                    paged_attention=True,
                     max_batch_size=1,
                     batch_wait_ms=0,
                 ),

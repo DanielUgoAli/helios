@@ -108,12 +108,6 @@ class Workload:
 
 
 WORKLOADS = (
-    # Workload(
-    #     "prefill-long",
-    #     "Long input with a short output.",
-    #     (("user", PREFILL_INPUT),),
-    #     8,
-    # ),
     Workload(
         "decode-long",
         "Short input with a long output.",

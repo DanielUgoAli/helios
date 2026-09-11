@@ -1,11 +1,3 @@
-"""Run with: uv run python -m unittest discover -s tests -v.
-
-These CPU regressions intentionally fail where cohort draining prevents admission.
-Only model loading and the scheduler thread are replaced; ticks, inference, KV
-storage, prefix caching, and futures use the production implementations.
-The synthetic memory budget does not validate CUDA peak memory or thread races.
-"""
-
 import unittest
 from collections import Counter
 from concurrent.futures import Future
@@ -44,10 +36,10 @@ class ContinuousBatchingTests(unittest.TestCase):
             torch.manual_seed(17)
             self.model = Qwen3Model(config).eval()
             with torch.no_grad():
-                # Keep greedy outputs sensitive to attention and KV corruption.
                 self.model.token_embedding.weight.mul_(0.1)
                 self.model.token_embedding.weight[0].zero_()
         self.prefills: Counter[tuple[int, ...]] = Counter()
+        self.prefill_chunk_sizes: list[int] = []
         self.decode_batch_sizes: list[int] = []
 
         def record_prefill(module, args):
@@ -61,7 +53,13 @@ class ContinuousBatchingTests(unittest.TestCase):
         hook = self.model.register_forward_pre_hook(record_prefill)
         self.addCleanup(hook.remove)
 
-    def make_engine(self, *, slots: int = 8, budget_tokens: int = 8192) -> Engine:
+    def make_engine(
+        self,
+        *,
+        slots: int = 8,
+        budget_tokens: int = 8192,
+        prefill_chunk_size: int = 256,
+    ) -> Engine:
         config = self.model.config
         element_size = self.model.token_embedding.weight.element_size()
         bytes_per_token = (
@@ -96,6 +94,7 @@ class ContinuousBatchingTests(unittest.TestCase):
                     model_id="test-cpu",
                     hf_token=None,
                     max_batch_size=slots,
+                    prefill_chunk_size=prefill_chunk_size,
                     batch_wait_ms=0,
                 ),
                 loader=loader,
@@ -112,6 +111,25 @@ class ContinuousBatchingTests(unittest.TestCase):
         )
         recorder.start()
         self.addCleanup(recorder.stop)
+
+        prefill = engine.generator.decoder.prefill_chunk
+
+        def record_prefill(cache, input_ids_slice):
+            size = (
+                input_ids_slice.shape[-1]
+                if isinstance(input_ids_slice, torch.Tensor)
+                else len(input_ids_slice)
+            )
+            self.prefill_chunk_sizes.append(size)
+            return prefill(cache, input_ids_slice)
+
+        prefill_recorder = patch.object(
+            engine.generator.decoder,
+            "prefill_chunk",
+            side_effect=record_prefill,
+        )
+        prefill_recorder.start()
+        self.addCleanup(prefill_recorder.stop)
         return engine
 
     def enqueue(
@@ -222,7 +240,7 @@ class ContinuousBatchingTests(unittest.TestCase):
         self.check_replacement([11, 12, 13, 14, 15])
 
     def test_real_budget_shortage_waits_then_admits_after_release(self) -> None:
-        engine = self.make_engine(slots=2, budget_tokens=22)
+        engine = self.make_engine(slots=2, budget_tokens=256)
         prompt = [3, 4, 5, 6]
         first = self.enqueue(engine, "first", prompt, 10)
         second = self.enqueue(engine, "second", prompt, 10)
@@ -250,7 +268,7 @@ class ContinuousBatchingTests(unittest.TestCase):
         self,
     ) -> None:
         engine = self.make_engine(slots=2)
-        prefix = list(range(1, 21))
+        prefix = [index % 63 + 1 for index in range(260)]
         prime = self.enqueue(engine, "prime", prefix, 2)
         self.finish(engine, prime)
         extended = prefix + [21, 22]
@@ -261,13 +279,162 @@ class ContinuousBatchingTests(unittest.TestCase):
         self.assert_active(engine, "cached", "uncached")
         self.finish(engine, cached, uncached)
 
-        self.assertEqual(cached.result(timeout=0).prefix.restored_tokens, 16)
+        self.assertEqual(cached.result(timeout=0).prefix.restored_tokens, 256)
         self.assertEqual(uncached.result(timeout=0).prefix.restored_tokens, 0)
         self.assert_matches_single(cached, extended, 6)
         self.assert_matches_single(uncached, short, 4)
 
+    def test_long_prefill_resumes_in_bounded_chunks(self) -> None:
+        chunk_size = 4
+        engine = self.make_engine(prefill_chunk_size=chunk_size)
+        prompt = list(range(1, 11))
+        future = self.enqueue(engine, "long", prompt, 3)
+
+        self.tick(engine)
+        active = engine._active_requests[0]
+        self.assert_active(engine, "long")
+        self.assertFalse(future.done())
+        self.assertEqual(active.prompt_offset, chunk_size)
+        self.assertIsNone(active.pending_token_id)
+
+        self.tick(engine)
+        active = engine._active_requests[0]
+        self.assertFalse(future.done())
+        self.assertEqual(active.prompt_offset, chunk_size * 2)
+        self.assertIsNone(active.pending_token_id)
+
+        self.tick(engine)
+        self.assertEqual(self.prefill_chunk_sizes, [4, 4, 2])
+        self.assertTrue(all(size <= chunk_size for size in self.prefill_chunk_sizes))
+        self.finish(engine, future)
+        self.assert_matches_single(future, prompt, 3)
+
+    def test_decoding_request_advances_while_newcomer_prefills(self) -> None:
+        chunk_size = 4
+        engine = self.make_engine(
+            slots=2, budget_tokens=512, prefill_chunk_size=chunk_size
+        )
+        survivor_prompt = [3, 4, 5]
+        survivor = self.enqueue(engine, "survivor", survivor_prompt, 6)
+        self.tick(engine)
+        survivor_active = engine._active_requests[0]
+        output_count = len(survivor_active.output_ids)
+
+        newcomer_prompt = list(range(10, 19))
+        newcomer = self.enqueue(engine, "newcomer", newcomer_prompt, 6)
+        self.tick(engine)
+
+        active = {
+            request.request.request_id: request for request in engine._active_requests
+        }
+        self.assertEqual(len(active["survivor"].output_ids), output_count + 1)
+        self.assertEqual(active["newcomer"].prompt_offset, chunk_size)
+        self.assertIsNone(active["newcomer"].pending_token_id)
+        self.assertFalse(newcomer.done())
+        self.assertLessEqual(max(self.prefill_chunk_sizes), chunk_size)
+
+        self.finish(engine, survivor, newcomer)
+        self.assert_matches_single(survivor, survivor_prompt, 6)
+        self.assert_matches_single(newcomer, newcomer_prompt, 6)
+
+    def test_chunked_generation_matches_independent_monolithic_generation(self) -> None:
+        chunk_size = 3
+        prompt = list(range(20, 31))
+        engine = self.make_engine(prefill_chunk_size=chunk_size)
+        future = self.enqueue(engine, "chunked", prompt, 6)
+
+        self.finish(engine, future)
+
+        self.assertEqual(self.prefill_chunk_sizes, [3, 3, 3, 2])
+        self.assert_matches_single(future, prompt, 6)
+
+    def test_exact_prefix_hit_resumes_from_the_previous_complete_block(self) -> None:
+        engine = self.make_engine(
+            slots=1, budget_tokens=1536, prefill_chunk_size=64
+        )
+        prompt = [index % 63 + 1 for index in range(512)]
+        prime = self.enqueue(engine, "prime", prompt, 1)
+        self.finish(engine, prime)
+        self.assertEqual(prime.result(timeout=0).prefix.stored_blocks, 2)
+        self.prefill_chunk_sizes.clear()
+
+        reused = self.enqueue(engine, "reused", prompt, 2)
+        self.tick(engine)
+
+        active = engine._active_requests[0]
+        self.assertEqual(active.prompt_offset, 320)
+        self.assertIsNone(active.pending_token_id)
+        self.finish(engine, reused)
+        result = reused.result(timeout=0)
+        self.assertEqual(result.prefix.hit_tokens, 512)
+        self.assertEqual(result.prefix.restored_tokens, 256)
+        self.assertEqual(self.prefill_chunk_sizes[:4], [64, 64, 64, 64])
+        self.assert_matches_single(reused, prompt, 2)
+
+    def test_partial_prefill_failure_releases_cache_for_waiting_request(self) -> None:
+        chunk_size = 4
+        engine = self.make_engine(
+            slots=1, budget_tokens=256, prefill_chunk_size=chunk_size
+        )
+        failed_prompt = list(range(1, 11))
+        waiting_prompt = [20, 21, 22, 23]
+        failed = self.enqueue(engine, "failed", failed_prompt, 4)
+        waiting = self.enqueue(engine, "waiting", waiting_prompt, 4)
+        self.tick(engine)
+        self.assert_active(engine, "failed")
+        self.assertEqual(engine.scheduler_snapshot()["waiting"], ["waiting"])
+        self.assertEqual(engine._active_requests[0].prompt_offset, chunk_size)
+
+        pool = engine.generator.decoder.page_pool
+        self.assertIsNotNone(pool)
+        assert pool is not None
+        self.assertEqual(pool.free_pages, pool.num_pages - 1)
+        original_prefill = engine.generator.decoder.prefill_chunk
+        prefill_calls = 0
+
+        def fail_once(cache, input_ids_slice):
+            nonlocal prefill_calls
+            prefill_calls += 1
+            if prefill_calls == 1:
+                raise RuntimeError("injected prefill failure")
+            return original_prefill(cache, input_ids_slice)
+
+        released_page_counts: list[int] = []
+        original_release = engine.generator.decoder.release_cache
+
+        def record_release(cache):
+            original_release(cache)
+            released_page_counts.append(pool.free_pages)
+
+        with (
+            patch.object(
+                engine.generator.decoder,
+                "prefill_chunk",
+                side_effect=fail_once,
+            ),
+            patch.object(
+                engine.generator.decoder,
+                "release_cache",
+                side_effect=record_release,
+            ),
+        ):
+            self.tick(engine)
+
+        with self.assertRaisesRegex(RuntimeError, "injected prefill failure"):
+            failed.result(timeout=0)
+        self.assertEqual(prefill_calls, 2)
+        self.assertEqual(released_page_counts, [pool.num_pages])
+        self.assert_active(engine, "waiting")
+        self.assertEqual(engine.scheduler_snapshot()["waiting"], [])
+        self.assertEqual(
+            engine._reserved_memory_bytes(),
+            engine.generator.request_cache_bytes(len(waiting_prompt) + 4),
+        )
+        self.finish(engine, waiting)
+        self.assert_matches_single(waiting, waiting_prompt, 4)
+
     def test_eos_releases_capacity_for_the_next_request(self) -> None:
-        engine = self.make_engine(slots=1, budget_tokens=22)
+        engine = self.make_engine(slots=1, budget_tokens=256)
         prompt = [3, 4, 5, 6]
         first_token = (
             Decoder(self.model)
@@ -291,7 +458,7 @@ class ContinuousBatchingTests(unittest.TestCase):
         self.assert_matches_single(next_request, [7, 8, 9, 10], 10)
 
     def test_cancelled_waiting_request_does_not_block_admission(self) -> None:
-        engine = self.make_engine(slots=1, budget_tokens=22)
+        engine = self.make_engine(slots=1, budget_tokens=256)
         first = self.enqueue(engine, "first", [3, 4, 5, 6], 10)
         cancelled = self.enqueue(engine, "cancelled", [7, 8, 9, 10], 10)
         last = self.enqueue(engine, "last", [11, 12, 13, 14], 10)
@@ -305,7 +472,7 @@ class ContinuousBatchingTests(unittest.TestCase):
         self.assert_matches_single(last, [11, 12, 13, 14], 10)
 
     def test_decode_failure_releases_capacity_for_waiting_request(self) -> None:
-        engine = self.make_engine(slots=1, budget_tokens=22)
+        engine = self.make_engine(slots=1, budget_tokens=256)
         failed = self.enqueue(engine, "failed", [3, 4, 5, 6], 10)
         next_request = self.enqueue(engine, "next", [7, 8, 9, 10], 10)
         self.tick(engine)
