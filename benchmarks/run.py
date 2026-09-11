@@ -231,7 +231,6 @@ def run_continuous_batch(
         raise ValueError("concurrency must be at least 1.")
     started = time.perf_counter()
     samples_by_id: dict[str, dict[str, Any]] = {}
-    completed = 0
     with ThreadPoolExecutor(max_workers=min(concurrency, len(specs))) as executor:
         futures = [
             executor.submit(run_request, base_url, model, spec, timeout=timeout)
@@ -239,11 +238,11 @@ def run_continuous_batch(
         ]
         for future in as_completed(futures):
             sample = future.result()
-            completed += 1
-            print_response(completed, len(specs), sample)
             samples_by_id[sample["id"]] = sample
     samples = [samples_by_id[spec.request_id] for spec in specs]
     elapsed_seconds = time.perf_counter() - started
+    for completed, sample in enumerate(samples, start=1):
+        print_response(completed, len(specs), sample)
     total_output_tokens = sum(sample["metrics"]["output_tokens"] for sample in samples)
     return samples, {
         "request_count": len(specs),

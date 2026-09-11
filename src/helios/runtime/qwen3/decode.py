@@ -388,6 +388,8 @@ class Decoder:
         if sampling.temperature == 0:
             return torch.argmax(logits, dim=-1, keepdim=True)
         probabilities = torch.softmax(logits / sampling.temperature, dim=-1)
+        if sampling.top_p == 1:
+            return torch.multinomial(probabilities, num_samples=1)
         sorted_probabilities, sorted_indices = torch.sort(
             probabilities, descending=True
         )

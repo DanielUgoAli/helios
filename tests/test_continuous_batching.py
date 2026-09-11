@@ -517,6 +517,42 @@ class ContinuousBatchingTests(unittest.TestCase):
         self.assert_matches_single(first, [3, 4, 5], 5)
         self.assert_matches_single(second, [6, 7, 8], 5)
 
+    def test_full_distribution_sampling_uses_unsorted_probabilities(self):
+        logits = torch.tensor([[1.0, 3.0, -2.0], [4.0, -1.0, 2.0]])
+        sampling = Sampling(temperature=0.7, top_p=1)
+        expected = torch.tensor([[1], [0]])
+        with (
+            patch("torch.sort", side_effect=AssertionError("unnecessary sort")),
+            patch("torch.multinomial", return_value=expected) as draw,
+        ):
+            actual = Decoder._sample(logits, sampling)
+        torch.testing.assert_close(actual, expected)
+        torch.testing.assert_close(
+            draw.call_args.args[0], torch.softmax(logits / 0.7, dim=-1)
+        )
+
+    def test_matching_sampling_batches_rows_with_different_token_limits(self):
+        engine = self.make_engine(slots=3)
+        for row in range(3):
+            engine.enqueue(
+                [3 + row, 7, 8], 0,
+                Sampling(temperature=0.2, top_p=1, max_new_tokens=5 + row),
+                request_id=str(row),
+            )
+        self.tick(engine)
+        logits = torch.full((3, 64), -torch.inf)
+        for row in range(3):
+            logits[row, 10 + row] = 0
+        with (
+            patch.object(engine.generator.decoder, "decode_caches", return_value=logits),
+            patch.object(engine.generator.decoder, "_sample", wraps=Decoder._sample) as sample,
+        ):
+            engine._decode_active_requests()
+        self.assertEqual(sample.call_count, 1)
+        self.assertEqual(
+            [active.output_ids[-1] for active in engine._active_requests], [10, 11, 12]
+        )
+
     def test_mixed_sampling_preserves_row_order_and_random_draws(self):
         engine = self.make_engine(slots=3)
         settings = (

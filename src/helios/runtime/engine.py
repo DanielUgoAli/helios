@@ -57,6 +57,7 @@ class Engine:
             loaded.cache,
             prefix_cache_ttl_seconds=config.prefix_cache_ttl_seconds,
         )
+        self._decode_events: tuple[torch.cuda.Event, torch.cuda.Event] | None = None
         self._generation_lock = Lock()
         self._max_batch_size = config.max_batch_size
         self._prefill_chunk_size = config.prefill_chunk_size
@@ -392,16 +393,19 @@ class Engine:
         events = None
         if device.type == "cuda":
             stream = torch.cuda.current_stream(device)
-            events = (
-                torch.cuda.Event(enable_timing=True),
-                torch.cuda.Event(enable_timing=True),
-            )
+            if self._decode_events is None:
+                self._decode_events = (
+                    torch.cuda.Event(enable_timing=True),
+                    torch.cuda.Event(enable_timing=True),
+                )
+            events = self._decode_events
             events[0].record(stream)
-        logger.debug(
-            "continuous_decode active_request_ids=%s %s",
-            [active.request.request_id for active in decoding],
-            self._memory_log_fields(self._reserved_memory_bytes()),
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "continuous_decode active_request_ids=%s %s",
+                [active.request.request_id for active in decoding],
+                self._memory_log_fields(self._reserved_memory_bytes()),
+            )
         logits = self.generator.decoder.decode_caches(
             [active.cache for active in decoding], tokens
         )
@@ -411,6 +415,14 @@ class Engine:
             active.request.sampling.temperature == 0 for active in decoding
         ):
             sampled = logits.argmax(dim=-1)
+        elif all(
+            active.request.sampling.temperature == decoding[0].request.sampling.temperature
+            and active.request.sampling.top_p == decoding[0].request.sampling.top_p
+            for active in decoding
+        ):
+            sampled = self.generator.decoder._sample(
+                logits, decoding[0].request.sampling
+            ).reshape(-1)
         else:
             sampled = torch.cat(
                 [
