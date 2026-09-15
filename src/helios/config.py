@@ -18,6 +18,9 @@ class HeliosConfig:
     max_batch_size: int = 8
     max_queue_size: int = 32
     batch_wait_ms: float = 2.0
+    torch_compile: bool = False
+    compile_fullgraph: bool = False
+    compile_diagnostics: bool = True
 
     def __post_init__(self) -> None:
         if (
@@ -52,6 +55,17 @@ class HeliosConfig:
             raise ValueError("max_queue_size must be at least 1.")
         if not math.isfinite(self.batch_wait_ms) or self.batch_wait_ms < 0:
             raise ValueError("batch_wait_ms must be finite and non-negative.")
+        if self.compile_fullgraph and not self.torch_compile:
+            raise ValueError("compile_fullgraph requires torch_compile.")
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name, str(default)).strip().lower()
+    if value in {"1", "true"}:
+        return True
+    if value in {"0", "false"}:
+        return False
+    raise ValueError(f"{name} must be true, false, 1, or 0.")
 
 
 def get_config() -> HeliosConfig:
@@ -72,4 +86,7 @@ def get_config() -> HeliosConfig:
         max_batch_size=int(os.getenv("HELIOS_MAX_BATCH_SIZE", "8")),
         max_queue_size=int(os.getenv("HELIOS_MAX_QUEUE_SIZE", "32")),
         batch_wait_ms=float(os.getenv("HELIOS_BATCH_WAIT_MS", "2")),
+        torch_compile=_env_bool("HELIOS_TORCH_COMPILE", False),
+        compile_fullgraph=_env_bool("HELIOS_COMPILE_FULLGRAPH", False),
+        compile_diagnostics=_env_bool("HELIOS_COMPILE_DIAGNOSTICS", True),
     )
