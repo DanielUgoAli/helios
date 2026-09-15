@@ -259,10 +259,44 @@ Helios loads a local `.env` file automatically.
 | `HELIOS_MAX_BATCH_SIZE` | `8` | Maximum number of concurrently active continuous requests. |
 | `HELIOS_MAX_QUEUE_SIZE` | `32` | Maximum number of waiting jobs. Excess work receives HTTP 503. |
 | `HELIOS_BATCH_WAIT_MS` | `2` | Initial admission window after the first queued request arrives. |
+| `HELIOS_TORCH_COMPILE` | `false` | Compile the whole model call with TorchInductor before warmup. Compilation is lazy. |
+| `HELIOS_COMPILE_FULLGRAPH` | `false` | Require one graph; stop on the first graph break. Requires compile enabled. |
+| `HELIOS_COMPILE_DIAGNOSTICS` | `true` | When compile is enabled, log Dynamo compilation activity, graph breaks, and recompilation reasons. |
 
 Set `HELIOS_MAX_BATCH_SIZE=1` to serialize ordinary requests while retaining the
 queue. More active slots can improve aggregate throughput, but KV memory and
 decode cost also grow. Benchmark on the target GPU and workload.
+
+## Optional compilation
+
+```bash
+HELIOS_TORCH_COMPILE=1 uv run helios 2>&1 | tee /tmp/helios-compile.log
+```
+
+This compiles the model in place after weight loading, covering paged prefill,
+decode, and mixed batches. The dense `decode_forward` reference method remains
+eager. Scheduling, page allocation before the forward, and sampling stay outside
+the compiled call. The default compiler mode and automatic dynamic-shape policy
+are used. Compilation can increase startup time, memory use, and request latency;
+it is disabled by default and does not imply a performance improvement.
+
+Diagnostics use PyTorch's native logs: `graph_breaks` identifies unsupported code
+and source locations; `recompiles` identifies failed guards that trigger another
+compilation. Dynamo INFO logs show compilation activity and timing. Normal mode
+allows graph breaks and may execute regions eagerly, including after compiler
+cache limits are reached. Backend errors are not suppressed or retried eagerly
+by Helios. Serving failures include a traceback and affected request IDs.
+
+For a strict capture audit, add `HELIOS_COMPILE_FULLGRAPH=1`; warmup stops at the
+first unsupported graph break. This is a diagnostic mode, not a speed setting.
+Existing warmup exercises multiple batch sizes and lengths but cannot guarantee
+that later requests will not recompile. Watch logs during serving as well.
+
+An explicit `TORCH_LOGS` setting takes precedence over Helios diagnostics. For
+example, `TORCH_LOGS="graph_breaks,recompiles_verbose"` reports more guard detail.
+Set `HELIOS_COMPILE_DIAGNOSTICS=0` to avoid enabling extra logs through Helios;
+explicit PyTorch logging settings still apply. Compare cold startup and the same
+HTTP workload with compile enabled and disabled before choosing to keep it on.
 
 ## Benchmarks
 

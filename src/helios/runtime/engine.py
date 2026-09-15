@@ -197,6 +197,10 @@ class Engine:
                 try:
                     self._run_mixed_batch()
                 except Exception as error:
+                    logger.exception(
+                        "model_batch_failed request_ids=%s",
+                        [active.request.request_id for active in self._active_requests],
+                    )
                     self._fail_active_requests(error)
             self._admit_requests(scheduler)
             scheduler.set_active(tuple(active.job for active in self._active_requests))

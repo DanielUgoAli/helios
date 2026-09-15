@@ -6,6 +6,7 @@ from huggingface_hub import snapshot_download
 
 from helios.config import HeliosConfig
 from helios.runtime.check import CacheCapacity, MemoryChecker, MemoryReport
+from helios.runtime.compilation import configure_compilation
 from helios.runtime.qwen3.config import QWEN3_4B_MODEL_ID, qwen3_4b_config
 from helios.runtime.qwen3.model import Qwen3Model
 from helios.runtime.qwen3.weights import Qwen3Weights
@@ -53,6 +54,7 @@ class Qwen3Loader:
         weights = Qwen3Weights(snapshot)
         weights.load_into(model)
         model.eval()
+        configure_compilation(model, config)
         cache = checker.cache(native_config)
         report = replace(report, cache=cache)
         return LoadedQwen3(model, cache, report, snapshot.name)
