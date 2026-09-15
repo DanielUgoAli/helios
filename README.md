@@ -89,8 +89,8 @@ The response follows the OpenAI chat-completion shape and contains one
 assistant choice plus prompt, completion, and total token counts. Cached prompt
 tokens are reported in `usage.prompt_tokens_details.cached_tokens`. The Helios
 `timings` object reports tokenization, queueing, prefix lookup, restore,
-prefill, decode, and cache-store time, together with time to first token,
-throughput, and prefix-cache hit rate.
+prefill, wall-clock decode, shared-forward decode compute, and cache-store time,
+together with time to first token, throughput, and prefix-cache hit rate.
 
 The chat tokenizer applies a fixed Qwen3 template and always opens the assistant
 turn with an empty `<think>` block, so the model does not emit a thinking
@@ -114,9 +114,11 @@ the rest of the OpenAI API are not implemented.
 
 Clients send ordinary chat-completion requests concurrently. Each scheduler tick
 selects one token for every request that is already decoding, then spends the
-remaining token budget on unfinished prompts. A prompt that fully fits the
-remaining budget is preferred. If a prompt has waited at least 100 milliseconds,
-the oldest waiting prompt is taken instead so long prefills still progress.
+remaining token budget across unfinished prompts. Prompts that fully fit are
+preferred and can share the same tick; any leftover budget goes to a longer
+prompt. Once a prompt has waited at least 100 milliseconds, the oldest waiting
+prompt takes priority for one chunk. Its wait age then resets, allowing other
+aged prefills to rotate ahead of continuing short arrivals.
 
 Selected tokens run in one packed model forward with independent sequence
 positions and paged KV mappings. A tick that contains only decode tokens reuses
@@ -146,10 +148,11 @@ flowchart LR
 ```
 
 Wall-clock time to first token and token intervals include scheduling and
-sampling. Compute measurements cover the shared model forward. A mixed batch
-duration is added to each participating request's current phase. Those numbers
-are not isolated per-request GPU costs, and summing them across requests does
-not estimate GPU utilization.
+sampling. `decode_seconds` and `decode_tokens_per_second` use those wall-clock
+token intervals. The corresponding `decode_compute_*` fields cover shared model
+forwards only. A mixed batch duration is added to each participating request's
+current phase. Those compute numbers are not isolated per-request GPU costs, and
+summing them across requests does not estimate GPU utilization.
 
 ### Paged attention
 
@@ -297,6 +300,9 @@ example, `TORCH_LOGS="graph_breaks,recompiles_verbose"` reports more guard detai
 Set `HELIOS_COMPILE_DIAGNOSTICS=0` to avoid enabling extra logs through Helios;
 explicit PyTorch logging settings still apply. Compare cold startup and the same
 HTTP workload with compile enabled and disabled before choosing to keep it on.
+After memory profiling replaces the provisional KV page pool, compile-enabled
+startup runs one final request against that pool before reporting healthy. This
+avoids making the first client request discover a pool-specific compiled path.
 
 ## Benchmarks
 
